@@ -1,0 +1,15 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+requests==2.32.3
+python-dotenv==1.0.1
+
+# Auth
+PyJWT==2.8.0
+passlib[bcrypt]==1.7.4
+
+# Finance data helpers
+yfinance==0.2.40
+psycopg2-binary==2.9.9
+
+# Billing
+stripe>=10.0.0,<11.0.0

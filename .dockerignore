@@ -1,0 +1,28 @@
+# Python
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Local DBs / logs
+*.sqlite
+*.db
+*.log
+
+# Secrets
+.env
+.env.*
+
+# Frontend
+frontend/node_modules
+frontend/dist
+frontend/.vite
+
+# Legacy frontend (not used in builds)
+frontend_next_legacy
+
+# local artifacts
+.DS_Store
+.idea
+.vscode

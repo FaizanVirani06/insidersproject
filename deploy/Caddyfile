@@ -1,0 +1,30 @@
+{
+  # Email is optional but recommended so Let's Encrypt can contact you.
+  email {$CADDY_EMAIL}
+}
+
+{$DOMAIN}, www.{$DOMAIN} {
+  encode zstd gzip
+
+  # -----------------
+  # Backend API
+  # -----------------
+  # The frontend calls /api/backend/... and we strip that prefix.
+  handle_path /api/backend/* {
+    reverse_proxy api:8000
+  }
+
+  # -----------------
+  # Frontend SPA
+  # -----------------
+  handle {
+    root * /srv
+
+    # React Router SPA fallback:
+    # - Serve static files when they exist
+    # - Otherwise serve index.html
+    try_files {path} /index.html
+
+    file_server
+  }
+}

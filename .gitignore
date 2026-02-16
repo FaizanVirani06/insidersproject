@@ -1,0 +1,38 @@
+# Secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Legacy Next build artifacts (kept only for reference)
+frontend_next_legacy/node_modules/
+frontend_next_legacy/.next/
+frontend_next_legacy/out/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+
+# Local databases / logs
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.log
+
+# Build outputs
+build/
+dist/
