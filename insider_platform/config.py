@@ -79,8 +79,8 @@ class Config:
     )
 
     # AI generation
-    AI_TEMPERATURE: float = float(os.environ.get("AI_TEMPERATURE", "0.2"))
-    AI_MAX_TOKENS: int = int(os.environ.get("AI_MAX_TOKENS", "2048"))
+    AI_TEMPERATURE: float = float(os.environ.get("AI_TEMPERATURE", "0.5"))
+    AI_MAX_TOKENS: int = int(os.environ.get("AI_MAX_TOKENS", "5000"))
 
     # Yahoo Finance (market cap)
     YAHOO_QUOTE_URL: str = os.environ.get(
@@ -98,7 +98,7 @@ class Config:
 
     AI_INPUT_SCHEMA_VERSION: str = os.environ.get("AI_INPUT_SCHEMA_VERSION", "ai_input_v2")
     AI_OUTPUT_SCHEMA_VERSION: str = os.environ.get("AI_OUTPUT_SCHEMA_VERSION", "ai_output_v1")
-    PROMPT_VERSION: str = os.environ.get("PROMPT_VERSION", "prompt_ai_v3")
+    PROMPT_VERSION: str = os.environ.get("PROMPT_VERSION", "prompt_ai_v4")
 
     # Benchmark (excess returns) - used for insider performance stats
     BENCHMARK_SYMBOL: str = os.environ.get("BENCHMARK_SYMBOL", "SPY.US")  # S&P500 proxy

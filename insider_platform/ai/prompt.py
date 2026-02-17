@@ -52,6 +52,33 @@ INSIDER HISTORY (IMPORTANT):
 - Use $.insider_history.prior_buy_events_total / prior_sell_events_total.
   First/second-ever buys/sells are more informative than routine activity.
 
+ROUTINE / SCHEDULED ACTIVITY (IMPORTANT):
+- Insider sales are common and often routine; do NOT assume bearish intent just because a sale occurred.
+- For comparable magnitude/context, sell signals are generally less informative than buy signals;
+  reserve high sell ratings for unusually strong bearish evidence.
+- Use $.insider_history.prior_sell_events_total to detect routine sellers:
+  - If prior_sell_events_total is high, treat many sales as less informative (lower rating and often lower confidence).
+- Use $.filing_context.footnotes when available to detect scheduled/automatic/plan-driven activity.
+  Treat phrases like "10b5-1", "Rule 10b5-1", "trading plan", "pre-arranged", "scheduled", "automatic",
+  "sell-to-cover", or "tax withholding" as evidence the trade may be planned or mechanical.
+  - Planned/mechanical sales should generally produce a weaker sell signal (often ~5.0–6.0),
+    unless other inputs show unusually strong bearish evidence (e.g., very large liquidation + cluster selling).
+  - Planned/mechanical context should not materially boost a buy signal.
+
+CALIBRATED RATING DISTRIBUTION (IMPORTANT):
+- A "non-special" / ordinary event should land around **5.0–6.0**, not ~7.
+- Ratings **7.0–8.0** should be reserved for clearly strong, above-typical setups with multiple independent signals.
+- Ratings **8.5–10.0** are exceptional and should be rare.
+  Examples of near-ideal buy setups (ONLY when supported by the provided input):
+  - Small/micro-cap ($.issuer_context.market_cap_bucket) with clustered buying ($.cluster_context.buy_cluster.cluster_flag)
+    involving multiple directors/execs ($.event.is_director / $.event.is_officer and cluster context),
+    large holdings increases ($.event.buy.holdings_change_pct / multiple), meaningful trade size vs market cap,
+    after a notable decline ($.trend_context.pre_returns.ret_60d negative, near 52w low, below SMAs),
+    and supportive catalyst context in $.issuer_context.news.
+  - Biotech/clinical catalysts should only be considered if explicitly present in $.issuer_context.news.
+- "A few promising bits" should NOT automatically push the rating into a strong-recommendation range.
+  Prefer 5–6 for mixed/limited evidence; move to 7–8 only when the evidence stacks up clearly.
+
 BENCHMARK NOTE:
 - insider_stats.*avg_return_* and win rates are computed on **excess returns** (trade_return - benchmark_return).
 - The benchmark symbol is provided in $.benchmark.symbol (default: SPY.US).
@@ -74,7 +101,8 @@ ANTI-ANCHORING / RATING DISPERSION RULE:
 - Start from $.baseline.*.rating and $.baseline.*.confidence and adjust only when specific input fields justify it.
 - If the baseline is mid-scale, make an explicit call: weaker-than-typical / typical / stronger-than-typical for this context
   (market cap bucket, insider role, holdings change, trade size, and insider history), and reflect that with a meaningful adjustment
-  (still within the allowed ±1.5 rating / ±0.15 confidence).
+  (typically within ±1.5 rating / ±0.15 confidence, but you may use the full allowed ±3.0 / ±0.35 when the context strongly warrants it
+   — especially to keep routine/scheduled sales near the 5–6 range).
 - Use the full 1.0–10.0 range when multiple independent signals are unusually strong or unusually weak.
   Reserve extreme ratings for clearly exceptional setups; avoid extreme ratings when evidence is mixed or sparse.
 - Use one-decimal precision intentionally; avoid repeatedly using “.5” ratings across unrelated events.
@@ -90,7 +118,7 @@ OUTPUT STRUCTURE (ai_output_v1):
 {
   "schema_version": "ai_output_v1",
   "model_id": "<string>",
-  "prompt_version": "prompt_ai_v3",
+  "prompt_version": "prompt_ai_v4",
   "generated_at_utc": "<ISO UTC ending with Z>",
   "event_key": {"issuer_cik":"...","owner_key":"...","accession_number":"..."},
   "verdict": {

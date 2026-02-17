@@ -195,9 +195,21 @@ def _fetch_filing_footnotes(conn: sqlite3.Connection, issuer_cik: str, accession
         if not isinstance(foots, list):
             continue
         for f in foots:
-            if not isinstance(f, str):
+            # Older rows may store footnotes as a list[str]. Newer parser stores
+            # list[{'id': 'F1', 'text': '...'}]. Support both.
+            txt: str | None
+            if isinstance(f, str):
+                txt = f
+            elif isinstance(f, dict):
+                t = f.get("text")
+                txt = t if isinstance(t, str) else None
+            else:
+                txt = None
+
+            if not txt:
                 continue
-            txt = f.strip()
+
+            txt = txt.strip()
             if not txt:
                 continue
             # normalize whitespace
@@ -211,7 +223,6 @@ def _fetch_filing_footnotes(conn: sqlite3.Connection, issuer_cik: str, accession
             if len(out) >= 20:
                 return out
     return out
-
 
 def build_ai_input(conn: sqlite3.Connection, cfg: Config, event_key: EventKey) -> Dict[str, Any]:
     """Build ai_input_v2 JSON from persisted computed fields."""
