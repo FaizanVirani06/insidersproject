@@ -172,6 +172,8 @@ def _handle_checkout_completed(cfg: Config, stripe: Any, event: Dict[str, Any]) 
                 price_id = items[0].get("price", {}).get("id")
         except Exception:
             price_id = None
+    if str(session.get("payment_status") or "").lower() == "paid":
+        status = "active"
 
     if user_id <= 0:
         # Best-effort fallback: map by customer id.
