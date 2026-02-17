@@ -14,7 +14,7 @@ type PlansResponse = {
 
 export function AccountPage() {
   const { user, refresh } = useAuth();
-  const [sp] = useSearchParams();
+  const [sp, setSp] = useSearchParams();
   const [plans, setPlans] = React.useState<PlansResponse>({ enabled: false });
   const [loadingPlans, setLoadingPlans] = React.useState(true);
   const [busy, setBusy] = React.useState<string | null>(null);
@@ -44,13 +44,25 @@ export function AccountPage() {
     };
   }, []);
 
+  const checkoutParam = (sp.get("checkout") || "").toLowerCase();
+  const handledCheckoutRef = React.useRef(false);
+
   React.useEffect(() => {
-    const c = (sp.get("checkout") || "").toLowerCase();
-    if (c === "success") {
+    // Stripe redirects back with ?checkout=success. If we keep that param in the
+    // URL and refresh user state, this effect can fire repeatedly and cause
+    // a "glitchy" re-render loop.
+    if (handledCheckoutRef.current) return;
+    if (checkoutParam === "success") {
+      handledCheckoutRef.current = true;
       setMsg("Payment successful — refreshing your subscription status…");
-      refresh();
+      void refresh();
+
+      // Remove the param from the URL so it doesn't retrigger on re-render.
+      const next = new URLSearchParams(sp);
+      next.delete("checkout");
+      setSp(next, { replace: true } as any);
     }
-  }, [sp, refresh]);
+  }, [checkoutParam, refresh, setSp, sp]);
 
   const isPaid = Boolean((user as any)?.is_paid) || user?.role === "admin";
   const status = (user as any)?.subscription_status || "";

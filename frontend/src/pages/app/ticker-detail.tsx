@@ -8,6 +8,7 @@ import { fmtInt } from "@/lib/format";
 import { EventCard } from "@/components/event-card";
 import { useAuth } from "@/components/auth-provider";
 import { apiFetch } from "@/lib/api";
+import { dedupeEventsByFiling } from "@/lib/event-utils";
 
 type EventsResponse = {
   ticker: string;
@@ -102,9 +103,9 @@ export function TickerDetailPage() {
     setNextOffset(data.next_offset ?? null);
 
     if (mode === "replace") {
-      setEvents(data.events ?? []);
+      setEvents(dedupeEventsByFiling(data.events ?? []));
     } else {
-      setEvents((prev) => [...prev, ...(data.events ?? [])]);
+      setEvents((prev) => dedupeEventsByFiling([...(prev ?? []), ...(data.events ?? [])]));
     }
   }
 

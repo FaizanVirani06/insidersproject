@@ -11,8 +11,12 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
 from insider_platform.config import Config, load_config
-from insider_platform.db import connect, init_db
+from insider_platform.db import connect, init_db, get_app_config, upsert_app_config
 from insider_platform.jobs.queue import enqueue_job
+
+from insider_platform.compute.trade_plan import compute_trade_plan_for_event
+
+from insider_platform.util.time import utcnow_iso
 
 from insider_platform.auth import get_current_user, require_admin, require_subscription
 from insider_platform.auth.crud import (
@@ -75,6 +79,60 @@ def _on_startup() -> None:
 @app.get("/health")
 def health() -> Dict[str, Any]:
     return {"status": "ok"}
+
+
+# -----------------------------
+# Public site content (Privacy / Terms)
+# -----------------------------
+
+
+class PageContentResponse(BaseModel):
+    slug: str
+    markdown: Optional[str] = None
+    updated_at_utc: Optional[str] = None
+
+
+class PageContentUpdateRequest(BaseModel):
+    markdown: str
+
+
+def _page_keys(slug: str) -> tuple[str, str]:
+    s = (slug or "").strip().lower()
+    if s not in ("privacy", "terms"):
+        raise HTTPException(status_code=404, detail="page_not_found")
+    return (f"page_{s}_markdown", f"page_{s}_updated_at_utc")
+
+
+@app.get("/public/page/{slug}", response_model=PageContentResponse)
+def get_public_page(slug: str) -> Dict[str, Any]:
+    content_key, updated_key = _page_keys(slug)
+    with connect(cfg.DB_DSN) as conn:
+        md = get_app_config(conn, content_key)
+        updated = get_app_config(conn, updated_key)
+    return {
+        "slug": slug.strip().lower(),
+        "markdown": md,
+        "updated_at_utc": updated,
+    }
+
+
+@app.put("/admin/page/{slug}", response_model=PageContentResponse)
+def update_page(
+    slug: str,
+    payload: PageContentUpdateRequest,
+    user: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    content_key, updated_key = _page_keys(slug)
+    md = (payload.markdown or "").strip()
+    with connect(cfg.DB_DSN) as conn:
+        upsert_app_config(conn, content_key, md)
+        upsert_app_config(conn, updated_key, utcnow_iso())
+        updated = get_app_config(conn, updated_key)
+    return {
+        "slug": slug.strip().lower(),
+        "markdown": md,
+        "updated_at_utc": updated,
+    }
 
 
 # -----------------------------
@@ -688,6 +746,7 @@ def list_events(
     open_market_only: bool = True,
     cluster_only: bool = False,
     ai_only: bool = True,
+    side: str = Query("both", description="Filter to only buys or sells: both|buy|sell"),
     sort_by: str = Query("ai_best_desc"),
     user: Dict[str, Any] = Depends(require_subscription),
 ) -> Dict[str, Any]:
@@ -720,6 +779,12 @@ def list_events(
 
     if ai_only:
         where.append("(e.ai_buy_rating IS NOT NULL OR e.ai_sell_rating IS NOT NULL OR e.ai_confidence IS NOT NULL)")
+
+    side_n = (side or "both").strip().lower()
+    if side_n in ("buy", "buys"):
+        where.append("e.has_buy=1")
+    elif side_n in ("sell", "sells"):
+        where.append("e.has_sell=1")
 
     where_sql = " AND ".join(where)
 
@@ -756,6 +821,7 @@ def list_events(
 
         return {
             "days": days,
+            "side": side_n,
             "offset": offset,
             "limit": limit,
             "next_offset": next_offset,
@@ -854,22 +920,51 @@ def get_event(
         ).fetchone()
 
         ai_latest = None
+        trade_plan = None
         if ai is not None:
             d = dict(ai)
+            output_obj = None
             try:
-                d["output"] = json.loads(d.get("output_json") or "null")
+                output_obj = json.loads(d.get("output_json") or "null")
             except Exception:
-                d["output"] = None
-            try:
-                d["input"] = json.loads(d.get("input_json") or "null")
-            except Exception:
+                output_obj = None
+
+            # AI outputs are safe for subscribed users, but AI *inputs* are admin-only.
+            if user.get("is_admin"):
+                try:
+                    d["input"] = json.loads(d.get("input_json") or "null")
+                except Exception:
+                    d["input"] = None
+            else:
                 d["input"] = None
+
+            # Remove model/prompt metadata from the user-facing payload for non-admins.
+            # (Keeps the UI simpler and avoids exposing prompt versions.)
+            if not user.get("is_admin") and isinstance(output_obj, dict):
+                output_obj.pop("model_id", None)
+                output_obj.pop("prompt_version", None)
+
+            d["output"] = output_obj
 
             # Drop big raw strings (we provide parsed objects instead)
             d.pop("output_json", None)
             d.pop("input_json", None)
 
+            if not user.get("is_admin"):
+                # Defensive: strip additional debug-ish fields.
+                d.pop("inputs_hash", None)
+                d.pop("input_schema_version", None)
+                d.pop("model_id", None)
+                d.pop("prompt_version", None)
+
             ai_latest = d
+
+            # Trade plan (BETA): high-confidence BUYs only.
+            try:
+                trade_plan = compute_trade_plan_for_event(conn, cfg, event, ai_output=output_obj)
+            except Exception as e:
+                # Never fail event detail due to trade-plan errors.
+                _debug(f"trade_plan_error: {e}")
         return {
             "event": event,
             "rows": [dict(r) for r in rows_raw],
@@ -880,6 +975,7 @@ def get_event(
                 "sell": dict(sell_cluster) if sell_cluster is not None else None,
             },
             "ai_latest": ai_latest,
+            "trade_plan": trade_plan,
         }
 
 

@@ -817,50 +817,80 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
     data_quality = ai_input.get("data_quality") or {}
     insider_history = ai_input.get("insider_history") or {}
     insider_stats = ai_input.get("insider_stats") or {}
+    filing_context = ai_input.get("filing_context") or {}
 
     bucket = issuer_context.get("market_cap_bucket")
 
-    def _bucket_adj(b: Any) -> float:
+    def _bucket_adj(b: Any, *, is_buy: bool) -> float:
         b = (str(b).strip().lower() if b is not None else "")
         if b == "micro":
-            return 0.7
+            return 0.7 if is_buy else 0.35
         if b == "small":
-            return 0.4
+            return 0.4 if is_buy else 0.2
         if b == "mid":
-            return 0.2
+            return 0.2 if is_buy else 0.1
         if b == "mega":
-            return -0.3
+            return -0.3 if is_buy else -0.15
         # large -> 0.0 (neutral)
         return 0.0
 
-    def _role_adj(title: Any) -> float:
+    def _role_adj(title: Any, *, is_buy: bool) -> float:
+        """Role weighting.
+
+        Insider **buys** are generally more informative across roles.
+        Insider **sells** are often routine; keep the role boost smaller.
+        """
         if _is_ceo(title):
-            return 0.6
+            return 0.6 if is_buy else 0.35
         if _is_exec(title):
-            return 0.3
+            return 0.3 if is_buy else 0.15
         return 0.0
 
     def _pct_base(pct: Optional[float], *, is_buy: bool) -> float:
         # pct is already a percentage (e.g. 190.0 means +190%).
+        # Buys: treat even moderate holdings increases as meaningful.
+        if is_buy:
+            if pct is None:
+                return 6.5
+            if pct >= 200:
+                return 9.5
+            if pct >= 100:
+                return 9.0
+            if pct >= 50:
+                return 8.5
+            if pct >= 25:
+                return 8.0
+            if pct >= 10:
+                return 7.5
+            if pct >= 5:
+                return 7.0
+            if pct >= 2:
+                return 6.5
+            if pct >= 1:
+                return 6.0
+            return 5.5
+
+        # Sells: sells are often for diversification/liquidity/taxes. Keep the
+        # baseline lower and reserve high ratings for unusually strong evidence.
         if pct is None:
-            return 6.5 if is_buy else 6.0
+            return 4.8
         if pct >= 200:
-            return 9.5 if is_buy else 9.0
+            return 8.3
         if pct >= 100:
-            return 9.0 if is_buy else 8.5
+            return 7.8
         if pct >= 50:
-            return 8.5 if is_buy else 8.0
+            return 7.1
         if pct >= 25:
-            return 8.0 if is_buy else 7.5
+            return 6.4
         if pct >= 10:
-            return 7.5 if is_buy else 7.0
+            return 5.6
         if pct >= 5:
-            return 7.0 if is_buy else 6.5
+            return 5.0
         if pct >= 2:
-            return 6.5
+            return 4.5
         if pct >= 1:
-            return 6.0
-        return 5.5
+            return 4.1
+        return 3.8
 
     def _trade_size_adj(dollars: Any, pct_mcap: Any) -> float:
         # Prefer % of market cap if we have it.
@@ -895,28 +925,62 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
             return 0.2
         return 0.0
 
-    def _history_adj(prior_events_total: Any) -> float:
+    def _history_adj(prior_events_total: Any, *, is_buy: bool) -> float:
         try:
             n = int(prior_events_total) if prior_events_total is not None else 0
         except Exception:
             n = 0
-        # Rarer events are more informative
-        if n == 0:
-            return 0.5
-        if n <= 2:
-            return 0.3
-        if n <= 5:
-            return 0.15
-        return 0.0
 
-    def _cluster_adj(cluster_obj: Dict[str, Any]) -> float:
+        # Buys: rarer buys are more informative.
+        if is_buy:
+            if n == 0:
+                return 0.5
+            if n <= 2:
+                return 0.3
+            if n <= 5:
+                return 0.15
+            return 0.0
+
+        # Sells: routine selling should be *penalized*.
+        if n == 0:
+            return 0.25
+        if n <= 2:
+            return 0.10
+        if n <= 5:
+            return 0.0
+        if n <= 8:
+            return -0.15
+        if n <= 12:
+            return -0.25
+        return -0.35
+
+    def _cluster_adj(cluster_obj: Dict[str, Any], *, is_buy: bool) -> float:
         try:
             if bool(cluster_obj.get("cluster_flag")):
                 # Clustered insider behavior is informative
-                return 0.4
+                return 0.4 if is_buy else 0.3
         except Exception:
             pass
         return 0.0
+
+    def _has_planned_sale_footnote(txt: Any) -> bool:
+        if not txt:
+            return False
+        t = str(txt).lower()
+        needles = [
+            "10b5",
+            "rule 10b5",
+            "trading plan",
+            "pre-arranged",
+            "prearranged",
+            "scheduled",
+            "automatic",
+            "sell-to-cover",
+            "sell to cover",
+            "tax withholding",
+            "withholding",
+        ]
+        return any(n in t for n in needles)
 
     def _trend_adj(is_buy: bool) -> float:
         # Lightly reward mean-reversion buys and momentum sells.
@@ -960,10 +1024,10 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
         buy_rating_f = _pct_base(buy_pct_f, is_buy=True)
         buy_reasons.append("pct_holdings_change")
         buy_rating_f += _trade_size_adj(buy.get("dollars"), buy.get("trade_value_pct_market_cap"))
-        buy_rating_f += _bucket_adj(bucket)
-        buy_rating_f += _role_adj(title)
-        buy_rating_f += _history_adj(insider_history.get("prior_buy_events_total"))
-        buy_rating_f += _cluster_adj(cluster_context.get("buy_cluster") or {})
+        buy_rating_f += _bucket_adj(bucket, is_buy=True)
+        buy_rating_f += _role_adj(title, is_buy=True)
+        buy_rating_f += _history_adj(insider_history.get("prior_buy_events_total"), is_buy=True)
+        buy_rating_f += _cluster_adj(cluster_context.get("buy_cluster") or {}, is_buy=True)
         buy_rating_f += _trend_adj(is_buy=True)
 
         buy_rating_f = _clamp(buy_rating_f, 1.0, 10.0)
@@ -999,22 +1063,42 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
         sell_rating_f = _pct_base(sell_pct_f, is_buy=False)
         sell_reasons.append("pct_holdings_change")
         sell_rating_f += _trade_size_adj(sell.get("dollars"), sell.get("trade_value_pct_market_cap"))
-        sell_rating_f += _bucket_adj(bucket)
-        sell_rating_f += _role_adj(title)
-        sell_rating_f += _history_adj(insider_history.get("prior_sell_events_total"))
-        sell_rating_f += _cluster_adj(cluster_context.get("sell_cluster") or {})
+        sell_rating_f += _bucket_adj(bucket, is_buy=False)
+        sell_rating_f += _role_adj(title, is_buy=False)
+        sell_rating_f += _history_adj(insider_history.get("prior_sell_events_total"), is_buy=False)
+        sell_rating_f += _cluster_adj(cluster_context.get("sell_cluster") or {}, is_buy=False)
         sell_rating_f += _trend_adj(is_buy=False)
+
+        # If footnotes suggest a mechanical/scheduled sale, de-emphasize.
+        if _has_planned_sale_footnote(filing_context.get("footnotes")):
+            sell_rating_f -= 0.8
+            sell_reasons.append("planned_or_mechanical_sale_footnote")
 
         sell_rating_f = _clamp(sell_rating_f, 1.0, 10.0)
         sell_rating = round(sell_rating_f, 1)
 
-        conf = 0.38
-        if sell_pct_f is not None and sell_pct_f >= 25:
+        conf = 0.26
+        if sell_pct_f is not None and sell_pct_f >= 50:
             conf += 0.10
+        elif sell_pct_f is not None and sell_pct_f >= 25:
+            conf += 0.07
         if _is_ceo(title) or _is_cfo(title):
             conf += 0.05
         if bool((cluster_context.get("sell_cluster") or {}).get("cluster_flag")):
             conf += 0.05
+        # Routine sellers -> lower confidence.
+        try:
+            prior_sells = int(insider_history.get("prior_sell_events_total") or 0)
+        except Exception:
+            prior_sells = 0
+        if prior_sells >= 12:
+            conf -= 0.10
+        elif prior_sells >= 8:
+            conf -= 0.07
+        elif prior_sells >= 5:
+            conf -= 0.04
+        if _has_planned_sale_footnote(filing_context.get("footnotes")):
+            conf -= 0.08
         if data_quality.get("sell_vwap_is_partial"):
             conf -= 0.07
         if data_quality.get("trend_missing"):

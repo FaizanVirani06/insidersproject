@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 
+import { useAuth } from "@/components/auth-provider";
 import type { EventDetail, InsiderEventRow } from "@/lib/types";
 import { fmtDate, fmtDollars, fmtNumber, fmtPercent } from "@/lib/format";
 import { apiFetch } from "@/lib/api";
@@ -79,10 +80,17 @@ function pickAiSummary(detail: EventDetail): { side: "buy" | "sell"; status: str
 }
 
 export function EventCard({ event }: { event: InsiderEventRow }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [open, setOpen] = React.useState(false);
   const [detail, setDetail] = React.useState<EventDetail | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  const ownerNames = (((event as any).owner_names as string[] | undefined) ?? []).filter(Boolean);
+  const ownerCount = (typeof (event as any).owner_count === "number" ? ((event as any).owner_count as number) : ownerNames.length) || 0;
+  const primaryOwner = event.owner_name_display || event.owner_key;
+  const ownerSuffix = ownerCount > 1 ? ` (+${ownerCount - 1} other${ownerCount - 1 === 1 ? "" : "s"})` : "";
 
   const hasBuy = Number(event.has_buy ?? 0) === 1;
   const hasSell = Number(event.has_sell ?? 0) === 1;
@@ -119,8 +127,18 @@ export function EventCard({ event }: { event: InsiderEventRow }) {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
+              {event.ticker && (
+                <Link
+                  to={`/app/ticker/${event.ticker}`}
+                  className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium bg-white hover:bg-black/5 dark:bg-black/30 dark:hover:bg-white/10"
+                  title="View ticker"
+                >
+                  {event.ticker}
+                </Link>
+              )}
               <div className="truncate text-base font-semibold">
-                {event.owner_name_display || event.owner_key}
+                {primaryOwner}
+                {ownerSuffix}
               </div>
 
               {hasBuy && <SideBadge side="buy" />}
@@ -129,6 +147,12 @@ export function EventCard({ event }: { event: InsiderEventRow }) {
               {Number(event.cluster_flag_buy ?? 0) === 1 && <Badge>Cluster Buy</Badge>}
               {Number(event.cluster_flag_sell ?? 0) === 1 && <Badge>Cluster Sell</Badge>}
             </div>
+
+            {(event as any).issuer_name && (
+              <div className="mt-1 text-xs text-black/60 dark:text-white/60 truncate">
+                {(event as any).issuer_name}
+              </div>
+            )}
 
             <div className="mt-1 text-sm text-black/60 dark:text-white/60">
               {event.owner_title || "—"}
@@ -188,12 +212,72 @@ export function EventCard({ event }: { event: InsiderEventRow }) {
                   {aiSummary?.summary || "No AI summary available for this event."}
                 </div>
 
-                {detail.ai_latest?.model_id && (
+                {isAdmin && detail.ai_latest?.model_id && (
                   <div className="mt-2 text-xs text-black/50 dark:text-white/50">
                     {detail.ai_latest.model_id} • prompt {detail.ai_latest.prompt_version}
                   </div>
                 )}
               </div>
+
+              {/* Trade plan (BETA) */}
+              {detail.trade_plan && (
+                <div className="rounded-lg border bg-black/5 p-3 dark:bg-white/5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold">
+                      Trade plan <span className="ml-2 rounded-full border px-2 py-0.5 text-[10px]">BETA</span>
+                    </div>
+                    <div className="text-xs text-black/60 dark:text-white/60">Technicals only</div>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <div className="text-xs text-black/60 dark:text-white/60">Entry (ref)</div>
+                      <div className="text-sm font-medium">
+                        ${fmtNumber(detail.trade_plan.entry.price, { digits: 2 })} <span className="text-xs text-black/50 dark:text-white/50">({fmtDate(detail.trade_plan.entry.date)})</span>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-black/60 dark:text-white/60">Stop loss</div>
+                      <div className="text-sm font-medium">
+                        ${fmtNumber(detail.trade_plan.stop_loss.price, { digits: 2 })}
+                        {detail.trade_plan.stop_loss.basis && (
+                          <span className="ml-2 text-xs text-black/50 dark:text-white/50">{detail.trade_plan.stop_loss.basis}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-black/60 dark:text-white/60">Trim 1</div>
+                      <div className="text-sm font-medium">
+                        ${fmtNumber(detail.trade_plan.trims?.[0]?.price ?? null, { digits: 2 })}
+                        {detail.trade_plan.trims?.[0]?.basis && (
+                          <span className="ml-2 text-xs text-black/50 dark:text-white/50">{detail.trade_plan.trims[0].basis}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-black/60 dark:text-white/60">Trim 2</div>
+                      <div className="text-sm font-medium">
+                        ${fmtNumber(detail.trade_plan.trims?.[1]?.price ?? null, { digits: 2 })}
+                        {detail.trade_plan.trims?.[1]?.basis && (
+                          <span className="ml-2 text-xs text-black/50 dark:text-white/50">{detail.trade_plan.trims[1].basis}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <div className="text-xs text-black/60 dark:text-white/60">Take profit</div>
+                      <div className="text-sm font-medium">
+                        ${fmtNumber(detail.trade_plan.take_profit.price, { digits: 2 })}
+                        {detail.trade_plan.take_profit.basis && (
+                          <span className="ml-2 text-xs text-black/50 dark:text-white/50">{detail.trade_plan.take_profit.basis}</span>
+                        )}
+                      </div>
+                      <div className="mt-2 text-[11px] text-black/60 dark:text-white/60">
+                        BETA: levels are heuristics based on daily adjusted closes. Not investment advice.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Outcomes */}
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">

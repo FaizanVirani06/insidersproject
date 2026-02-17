@@ -105,8 +105,11 @@ def _compute_side_clusters(conn: sqlite3.Connection, cfg: Config, ticker: str, s
                 idxs.append(j)
             j += 1
 
-        owners = {candidates_sorted[k].owner_key for k in idxs}
-        if len(owners) < 2:
+        # Multiple reporting owners can exist within a *single* accession number.
+        # Treat those as one "filing" so we don't accidentally manufacture clusters
+        # from duplicates of the same underlying trade.
+        filings = {candidates_sorted[k].accession_number for k in idxs}
+        if len(filings) < 2:
             # Not a cluster window; move anchor forward
             i += 1
             continue
@@ -114,7 +117,12 @@ def _compute_side_clusters(conn: sqlite3.Connection, cfg: Config, ticker: str, s
         window_start = candidates_sorted[i].trade_date
         window_end = max(candidates_sorted[k].trade_date for k in idxs)
 
-        total_dollars = sum(float(candidates_sorted[k].dollars or 0.0) for k in idxs)
+        # Avoid double-counting dollars within the same filing.
+        dollars_by_filing: Dict[str, float] = {}
+        for k in idxs:
+            acc = candidates_sorted[k].accession_number
+            dollars_by_filing[acc] = max(dollars_by_filing.get(acc, 0.0), float(candidates_sorted[k].dollars or 0.0))
+        total_dollars = sum(dollars_by_filing.values())
         execs_involved = any(candidates_sorted[k].is_exec for k in idxs)
         pct_vals = [
             candidates_sorted[k].pct_change
@@ -148,7 +156,7 @@ def _compute_side_clusters(conn: sqlite3.Connection, cfg: Config, ticker: str, s
                 side,
                 window_start,
                 window_end,
-                len(owners),
+                len(filings),
                 total_dollars,
                 1 if execs_involved else 0,
                 max_pct,
@@ -202,7 +210,7 @@ def _compute_side_clusters(conn: sqlite3.Connection, cfg: Config, ticker: str, s
             assigned[k] = True
 
         _debug(
-            f"Built cluster {cluster_id} ticker={ticker} side={side} insiders={len(owners)} dollars={total_dollars:.0f} window={window_start}->{window_end}"
+            f"Built cluster {cluster_id} ticker={ticker} side={side} filings={len(filings)} dollars={total_dollars:.0f} window={window_start}->{window_end}"
         )
 
         i += 1
