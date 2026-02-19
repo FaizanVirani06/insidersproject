@@ -11,12 +11,9 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
 from insider_platform.config import Config, load_config
-from insider_platform.db import connect, init_db, get_app_config, upsert_app_config
-from insider_platform.jobs.queue import enqueue_job
-
-from insider_platform.compute.trade_plan import compute_trade_plan_for_event
-
+from insider_platform.db import connect, init_db
 from insider_platform.util.time import utcnow_iso
+from insider_platform.jobs.queue import enqueue_job
 
 from insider_platform.auth import get_current_user, require_admin, require_subscription
 from insider_platform.auth.crud import (
@@ -79,60 +76,6 @@ def _on_startup() -> None:
 @app.get("/health")
 def health() -> Dict[str, Any]:
     return {"status": "ok"}
-
-
-# -----------------------------
-# Public site content (Privacy / Terms)
-# -----------------------------
-
-
-class PageContentResponse(BaseModel):
-    slug: str
-    markdown: Optional[str] = None
-    updated_at_utc: Optional[str] = None
-
-
-class PageContentUpdateRequest(BaseModel):
-    markdown: str
-
-
-def _page_keys(slug: str) -> tuple[str, str]:
-    s = (slug or "").strip().lower()
-    if s not in ("privacy", "terms"):
-        raise HTTPException(status_code=404, detail="page_not_found")
-    return (f"page_{s}_markdown", f"page_{s}_updated_at_utc")
-
-
-@app.get("/public/page/{slug}", response_model=PageContentResponse)
-def get_public_page(slug: str) -> Dict[str, Any]:
-    content_key, updated_key = _page_keys(slug)
-    with connect(cfg.DB_DSN) as conn:
-        md = get_app_config(conn, content_key)
-        updated = get_app_config(conn, updated_key)
-    return {
-        "slug": slug.strip().lower(),
-        "markdown": md,
-        "updated_at_utc": updated,
-    }
-
-
-@app.put("/admin/page/{slug}", response_model=PageContentResponse)
-def update_page(
-    slug: str,
-    payload: PageContentUpdateRequest,
-    user: Dict[str, Any] = Depends(require_admin),
-) -> Dict[str, Any]:
-    content_key, updated_key = _page_keys(slug)
-    md = (payload.markdown or "").strip()
-    with connect(cfg.DB_DSN) as conn:
-        upsert_app_config(conn, content_key, md)
-        upsert_app_config(conn, updated_key, utcnow_iso())
-        updated = get_app_config(conn, updated_key)
-    return {
-        "slug": slug.strip().lower(),
-        "markdown": md,
-        "updated_at_utc": updated,
-    }
 
 
 # -----------------------------
@@ -746,7 +689,6 @@ def list_events(
     open_market_only: bool = True,
     cluster_only: bool = False,
     ai_only: bool = True,
-    side: str = Query("both", description="Filter to only buys or sells: both|buy|sell"),
     sort_by: str = Query("ai_best_desc"),
     user: Dict[str, Any] = Depends(require_subscription),
 ) -> Dict[str, Any]:
@@ -779,12 +721,6 @@ def list_events(
 
     if ai_only:
         where.append("(e.ai_buy_rating IS NOT NULL OR e.ai_sell_rating IS NOT NULL OR e.ai_confidence IS NOT NULL)")
-
-    side_n = (side or "both").strip().lower()
-    if side_n in ("buy", "buys"):
-        where.append("e.has_buy=1")
-    elif side_n in ("sell", "sells"):
-        where.append("e.has_sell=1")
 
     where_sql = " AND ".join(where)
 
@@ -821,7 +757,6 @@ def list_events(
 
         return {
             "days": days,
-            "side": side_n,
             "offset": offset,
             "limit": limit,
             "next_offset": next_offset,
@@ -920,51 +855,22 @@ def get_event(
         ).fetchone()
 
         ai_latest = None
-        trade_plan = None
         if ai is not None:
             d = dict(ai)
-            output_obj = None
             try:
-                output_obj = json.loads(d.get("output_json") or "null")
+                d["output"] = json.loads(d.get("output_json") or "null")
             except Exception:
-                output_obj = None
-
-            # AI outputs are safe for subscribed users, but AI *inputs* are admin-only.
-            if user.get("is_admin"):
-                try:
-                    d["input"] = json.loads(d.get("input_json") or "null")
-                except Exception:
-                    d["input"] = None
-            else:
+                d["output"] = None
+            try:
+                d["input"] = json.loads(d.get("input_json") or "null")
+            except Exception:
                 d["input"] = None
-
-            # Remove model/prompt metadata from the user-facing payload for non-admins.
-            # (Keeps the UI simpler and avoids exposing prompt versions.)
-            if not user.get("is_admin") and isinstance(output_obj, dict):
-                output_obj.pop("model_id", None)
-                output_obj.pop("prompt_version", None)
-
-            d["output"] = output_obj
 
             # Drop big raw strings (we provide parsed objects instead)
             d.pop("output_json", None)
             d.pop("input_json", None)
 
-            if not user.get("is_admin"):
-                # Defensive: strip additional debug-ish fields.
-                d.pop("inputs_hash", None)
-                d.pop("input_schema_version", None)
-                d.pop("model_id", None)
-                d.pop("prompt_version", None)
-
             ai_latest = d
-
-            # Trade plan (BETA): high-confidence BUYs only.
-            try:
-                trade_plan = compute_trade_plan_for_event(conn, cfg, event, ai_output=output_obj)
-            except Exception as e:
-                # Never fail event detail due to trade-plan errors.
-                _debug(f"trade_plan_error: {e}")
         return {
             "event": event,
             "rows": [dict(r) for r in rows_raw],
@@ -975,7 +881,6 @@ def get_event(
                 "sell": dict(sell_cluster) if sell_cluster is not None else None,
             },
             "ai_latest": ai_latest,
-            "trade_plan": trade_plan,
         }
 
 
@@ -1068,6 +973,12 @@ def admin_jobs(
     _admin: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
     with connect(cfg.DB_DSN) as conn:
+        # Always return status counts for quick triage
+        crows = conn.execute(
+            "SELECT status, COUNT(*) AS count FROM jobs GROUP BY status ORDER BY status"
+        ).fetchall()
+        counts = {str(r["status"]): int(r["count"]) for r in crows}
+
         where = ""
         params: List[Any] = []
         if status:
@@ -1088,7 +999,269 @@ def admin_jobs(
             (*params, limit),
         ).fetchall()
 
-        return {"jobs": [dict(r) for r in rows]}
+        return {"jobs": [dict(r) for r in rows], "counts": counts}
+
+
+@app.get("/admin/monitoring")
+def admin_monitoring(
+    window_hours: int = Query(24, ge=1, le=168),
+    limit_types: int = Query(25, ge=1, le=200),
+    _admin: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Lightweight operational metrics for admins.
+
+    Designed to help decide when to run more workers:
+    - queue depth (pending by job_type)
+    - throughput over time (success/error per hour)
+    - end-to-end latency (enqueue -> completed for successful jobs)
+    - recent errors
+    """
+
+    def _to_int(x: Any) -> int:
+        try:
+            return int(x or 0)
+        except Exception:
+            return 0
+
+    def _to_float(x: Any) -> float | None:
+        if x is None:
+            return None
+        try:
+            return float(x)
+        except Exception:
+            return None
+
+    with connect(cfg.DB_DSN) as conn:
+        dialect = str(getattr(conn, "dialect", "sqlite"))
+
+        # Status counts
+        srows = conn.execute(
+            "SELECT status, COUNT(*) AS count FROM jobs GROUP BY status ORDER BY status"
+        ).fetchall()
+        status_counts = {str(r["status"]): _to_int(r["count"]) for r in srows}
+
+        # Oldest pending age (seconds)
+        oldest_pending_age_sec: float | None = None
+        if status_counts.get("pending", 0) > 0:
+            if dialect == "postgres":
+                r = conn.execute(
+                    """
+                    SELECT EXTRACT(EPOCH FROM (NOW() - MIN(created_at::timestamptz))) AS age_sec
+                    FROM jobs
+                    WHERE status='pending'
+                    """
+                ).fetchone()
+                oldest_pending_age_sec = _to_float(r["age_sec"] if r else None)
+            else:
+                r = conn.execute(
+                    "SELECT MIN(created_at) AS oldest FROM jobs WHERE status='pending'"
+                ).fetchone()
+                if r and r.get("oldest"):
+                    try:
+                        oldest = str(r["oldest"]).replace("Z", "+00:00")
+                        dt_oldest = datetime.fromisoformat(oldest)
+                        oldest_pending_age_sec = float((datetime.now(timezone.utc) - dt_oldest).total_seconds())
+                    except Exception:
+                        oldest_pending_age_sec = None
+
+        # Pending + error breakdown
+        pending_by_type = conn.execute(
+            """
+            SELECT job_type, COUNT(*) AS count
+            FROM jobs
+            WHERE status='pending'
+            GROUP BY job_type
+            ORDER BY count DESC
+            LIMIT ?
+            """,
+            (limit_types,),
+        ).fetchall()
+
+        error_by_type = conn.execute(
+            """
+            SELECT job_type, COUNT(*) AS count
+            FROM jobs
+            WHERE status='error'
+            GROUP BY job_type
+            ORDER BY count DESC
+            LIMIT ?
+            """,
+            (limit_types,),
+        ).fetchall()
+
+        # Throughput per hour
+        if dialect == "postgres":
+            trows = conn.execute(
+                """
+                SELECT date_trunc('hour', updated_at::timestamptz) AS bucket,
+                       status,
+                       COUNT(*) AS count
+                FROM jobs
+                WHERE status IN ('success','error')
+                  AND updated_at::timestamptz >= (NOW() - (? * INTERVAL '1 hour'))
+                GROUP BY bucket, status
+                ORDER BY bucket ASC
+                """,
+                (window_hours,),
+            ).fetchall()
+        else:
+            start_iso = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat().replace(
+                "+00:00", "Z"
+            )
+            trows = conn.execute(
+                """
+                SELECT substr(updated_at, 1, 13) AS bucket,
+                       status,
+                       COUNT(*) AS count
+                FROM jobs
+                WHERE status IN ('success','error')
+                  AND updated_at >= ?
+                GROUP BY bucket, status
+                ORDER BY bucket ASC
+                """,
+                (start_iso,),
+            ).fetchall()
+
+        # Build full bucket list so the chart is stable.
+        end_bucket = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        start_bucket = end_bucket - timedelta(hours=max(window_hours - 1, 0))
+        buckets = [start_bucket + timedelta(hours=i) for i in range(window_hours)]
+        points: Dict[str, Dict[str, Any]] = {
+            b.isoformat().replace("+00:00", "Z"): {"hour": b.isoformat().replace("+00:00", "Z"), "success": 0, "error": 0}
+            for b in buckets
+        }
+
+        for r in trows:
+            st = str(r["status"]) if r.get("status") is not None else ""
+            if st not in ("success", "error"):
+                continue
+
+            bucket_val = r.get("bucket")
+            if dialect == "postgres":
+                # date_trunc(timestamptz) returns a datetime
+                if isinstance(bucket_val, datetime):
+                    bdt = bucket_val
+                else:
+                    try:
+                        bdt = datetime.fromisoformat(str(bucket_val).replace("Z", "+00:00"))
+                    except Exception:
+                        continue
+                bkey = bdt.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0).isoformat().replace(
+                    "+00:00", "Z"
+                )
+            else:
+                b = str(bucket_val)
+                # sqlite bucket is 'YYYY-MM-DDTHH'
+                bkey = (b + ":00:00Z") if len(b) == 13 else b
+
+            if bkey not in points:
+                # If the DB returns a bucket slightly outside the generated range, ignore it.
+                continue
+
+            points[bkey][st] = _to_int(r.get("count"))
+
+        throughput_hourly = [points[k] for k in sorted(points.keys())]
+
+        # Latency (successful jobs only)
+        if dialect == "postgres":
+            lrows = conn.execute(
+                """
+                WITH base AS (
+                  SELECT job_type,
+                         EXTRACT(EPOCH FROM (updated_at::timestamptz - created_at::timestamptz)) AS latency_sec
+                  FROM jobs
+                  WHERE status='success'
+                    AND updated_at::timestamptz >= (NOW() - (? * INTERVAL '1 hour'))
+                )
+                SELECT job_type,
+                       COUNT(*) AS n,
+                       AVG(latency_sec) AS avg_sec,
+                       percentile_cont(0.50) WITHIN GROUP (ORDER BY latency_sec) AS p50_sec,
+                       percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_sec) AS p95_sec
+                FROM base
+                GROUP BY job_type
+                ORDER BY n DESC
+                LIMIT ?
+                """,
+                (window_hours, limit_types),
+            ).fetchall()
+        else:
+            start_iso = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat().replace(
+                "+00:00", "Z"
+            )
+            lrows = conn.execute(
+                """
+                SELECT job_type,
+                       COUNT(*) AS n,
+                       AVG((julianday(updated_at) - julianday(created_at)) * 86400.0) AS avg_sec
+                FROM jobs
+                WHERE status='success' AND updated_at >= ?
+                GROUP BY job_type
+                ORDER BY n DESC
+                LIMIT ?
+                """,
+                (start_iso, limit_types),
+            ).fetchall()
+
+        latency_by_type: List[Dict[str, Any]] = []
+        for r in lrows:
+            latency_by_type.append(
+                {
+                    "job_type": str(r.get("job_type")),
+                    "n": _to_int(r.get("n")),
+                    "avg_sec": _to_float(r.get("avg_sec")),
+                    "p50_sec": _to_float(r.get("p50_sec")) if "p50_sec" in r else None,
+                    "p95_sec": _to_float(r.get("p95_sec")) if "p95_sec" in r else None,
+                }
+            )
+
+        # Backfill queue counts
+        try:
+            bq = conn.execute(
+                "SELECT status, COUNT(*) AS count FROM backfill_queue GROUP BY status ORDER BY status"
+            ).fetchall()
+            backfill_counts = [{"status": str(r["status"]), "count": _to_int(r["count"])} for r in bq]
+        except Exception:
+            backfill_counts = []
+
+        # Small table snapshots
+        table_counts: Dict[str, int] = {}
+        for table in ("issuer_master", "insider_events", "ai_outputs", "users"):
+            try:
+                r = conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
+                table_counts[table] = _to_int(r.get("n") if r else 0)
+            except Exception:
+                table_counts[table] = 0
+
+        # Recent errors
+        erows = conn.execute(
+            """
+            SELECT job_id, job_type, status, dedupe_key, attempts, last_error, created_at, updated_at
+            FROM jobs
+            WHERE status='error'
+            ORDER BY updated_at DESC
+            LIMIT 50
+            """
+        ).fetchall()
+
+        return {
+            "now": utcnow_iso(),
+            "window_hours": window_hours,
+            "dialect": dialect,
+            "status_counts": status_counts,
+            "oldest_pending_age_sec": oldest_pending_age_sec,
+            "pending_by_type": [
+                {"job_type": str(r["job_type"]), "count": _to_int(r["count"])} for r in pending_by_type
+            ],
+            "error_by_type": [
+                {"job_type": str(r["job_type"]), "count": _to_int(r["count"])} for r in error_by_type
+            ],
+            "throughput_hourly": throughput_hourly,
+            "latency_by_type": latency_by_type,
+            "backfill_counts": backfill_counts,
+            "table_counts": table_counts,
+            "recent_errors": [dict(r) for r in erows],
+        }
 
 
 @app.post("/admin/enqueue/reparse_ticker")

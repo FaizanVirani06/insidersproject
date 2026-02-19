@@ -51,19 +51,15 @@ export function TickersPage() {
       <div className="flex items-end gap-3">
         <div className="flex-1">
           <h1 className="text-2xl font-semibold">Tickers</h1>
-          <p className="mt-1 text-sm text-black/60 dark:text-white/60">
-            Browse issuers, then drill into insider events.
-          </p>
+          <p className="mt-1 text-sm muted">Browse issuers, then drill into insider events.</p>
         </div>
 
         <div className="w-full max-w-sm">
-          <label className="block text-xs font-medium text-black/60 dark:text-white/60">
-            Search
-          </label>
+          <label className="block text-xs font-medium muted">Search</label>
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="mt-1 w-full rounded-md border bg-transparent px-3 py-2 text-sm"
+            className="input mt-1"
             placeholder="AAPL, MSFT, ..."
           />
         </div>
@@ -76,14 +72,14 @@ export function TickersPage() {
       )}
 
       {loading ? (
-        <div className="text-sm text-black/60 dark:text-white/60">Loading…</div>
+        <div className="text-sm muted">Loading…</div>
       ) : (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {filtered.map((t) => (
             <Link
               key={t.current_ticker}
               to={`/app/ticker/${encodeURIComponent(t.current_ticker)}`}
-              className="rounded-xl border bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow dark:bg-black/20"
+              className="glass-card p-4 transition hover:-translate-y-0.5 hover:shadow-md"
             >
               <div className="flex items-start gap-3">
                 <div className="min-w-0 flex-1">
@@ -92,20 +88,20 @@ export function TickersPage() {
                       {t.current_ticker}
                     </div>
                     {t.market_cap_bucket && (
-                      <span className="rounded-full border px-2 py-0.5 text-xs text-black/60 dark:text-white/60">
+                      <span className="badge">
                         {t.market_cap_bucket}
                       </span>
                     )}
                   </div>
-                  <div className="mt-0.5 truncate text-sm text-black/70 dark:text-white/70">
+                  <div className="mt-0.5 truncate text-sm text-zinc-800 dark:text-zinc-200">
                     {t.issuer_name || "—"}
                   </div>
-                  <div className="mt-1 text-xs text-black/50 dark:text-white/50">
+                  <div className="mt-1 text-xs muted-2">
                     CIK: {t.issuer_cik} • Last filing: {fmtDate(t.last_filing_date)}
                   </div>
                 </div>
 
-                <div className="shrink-0 text-right text-xs text-black/60 dark:text-white/60">
+                <div className="shrink-0 text-right text-xs muted">
                   <div>Events: {fmtInt(t.open_market_event_count ?? 0)}</div>
                   <div>AI: {fmtInt(t.ai_event_count ?? 0)}</div>
                   <div>Clusters: {fmtInt(t.cluster_event_count ?? 0)}</div>
@@ -115,7 +111,7 @@ export function TickersPage() {
           ))}
 
           {filtered.length === 0 && (
-            <div className="text-sm text-black/60 dark:text-white/60">No tickers found.</div>
+            <div className="text-sm muted">No tickers found.</div>
           )}
         </div>
       )}

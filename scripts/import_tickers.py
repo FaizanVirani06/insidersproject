@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+
 from insider_platform.config import Config
 from insider_platform.db import connect, init_db
 from insider_platform.sec.tickers import fetch_sec_company_tickers, resolve_ticker_to_cik10
@@ -62,7 +63,7 @@ def main() -> None:
         print(f"No tickers found in {tickers_path}")
         return
 
-    print("Loading SEC ticker map...")
+    print(f"Loading SEC ticker map...")
     ticker_map = fetch_sec_company_tickers(cfg.SEC_USER_AGENT)
     now = utcnow_iso()
 
@@ -91,29 +92,33 @@ def main() -> None:
                 """,
                 (rec.cik10, rec.ticker, now, rec.title),
             )
-
-            # sqlite3 rowcount is 1 for insert and update; psycopg2 rowcount is also 1.
-            # lastrowid is sqlite-specific, so counts are best-effort across DBs.
-            try:
-                if getattr(cur, "lastrowid", None):
-                    inserted += 1
-                else:
-                    # In Postgres this will typically fall here.
-                    updated += 1
-            except Exception:
+            # sqlite3 rowcount is 1 for insert and update; best-effort counts:
+            if cur.lastrowid:
+                inserted += 1
+            else:
                 updated += 1
 
         # Store a marker so admins can confirm imports happened.
-        # Your production schema is (key text primary key, value text not null).
-        conn.execute(
-            """
-            INSERT INTO app_config (key, value)
-            VALUES (?,?)
-            ON CONFLICT (key) DO UPDATE SET value = excluded.value
-            """,
-            ("tickers_imported_at_utc", now),
-        )
-
+        # NOTE: some DBs have app_config(key,value) only; newer schema may add updated_at.
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(app_config)").fetchall()]
+        if "updated_at" in cols:
+            conn.execute(
+                """
+                INSERT INTO app_config(key,value,updated_at)
+                VALUES (?,?,?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+                """,
+                ("tickers_imported_at_utc", now, now),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO app_config(key,value)
+                VALUES (?,?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                ("tickers_imported_at_utc", now),
+            )
     print(f"Done. inserted_or_updated={inserted+updated} missing={len(missing)}")
     if missing:
         print("Missing tickers (not found in SEC map), first 50:")

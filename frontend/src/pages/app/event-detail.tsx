@@ -8,12 +8,9 @@ import type { EventDetail, PricePoint } from "@/lib/types";
 import { addDays, fmtDate, fmtDollars, fmtNumber, fmtPercent, minIsoDate } from "@/lib/format";
 import { PriceChart } from "@/components/price-chart";
 import { RegenerateAIButton } from "@/components/regenerate-ai-button";
-import { useAuth } from "@/components/auth-provider";
 import { apiFetch } from "@/lib/api";
 
 export function EventDetailPage() {
-  const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
   const params = useParams<{ issuer_cik: string; owner_key: string; accession_number: string }>();
 
   const issuerCik = decodeURIComponent(String(params?.issuer_cik ?? ""));
@@ -116,7 +113,7 @@ export function EventDetailPage() {
       </div>
 
       {/* Chart */}
-      <div className="rounded-xl border bg-white p-4 shadow-sm dark:bg-black/20">
+      <div className="glass-card p-4">
         <div className="flex items-center justify-between">
           <div className="text-sm font-semibold">Price chart</div>
           <div className="text-xs text-black/50 dark:text-white/50">Adj close</div>
@@ -128,7 +125,7 @@ export function EventDetailPage() {
 
       {/* Summary cards */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        <div className="rounded-xl border bg-white p-4 shadow-sm dark:bg-black/20">
+        <div className="glass-card p-4">
           <div className="text-xs text-black/50 dark:text-white/50">Totals</div>
           <div className="mt-2 text-sm">
             <div>
@@ -140,7 +137,7 @@ export function EventDetailPage() {
           </div>
         </div>
 
-        <div className="rounded-xl border bg-white p-4 shadow-sm dark:bg-black/20">
+        <div className="glass-card p-4">
           <div className="text-xs text-black/50 dark:text-white/50">AI rating</div>
           <div className="mt-2 text-sm">
             <div>
@@ -155,7 +152,7 @@ export function EventDetailPage() {
           </div>
         </div>
 
-        <div className="rounded-xl border bg-white p-4 shadow-sm dark:bg-black/20">
+        <div className="glass-card p-4">
           <div className="text-xs text-black/50 dark:text-white/50">Outcomes</div>
           <div className="mt-2 space-y-1 text-sm">
             {detail.outcomes.length === 0 ? (
@@ -175,16 +172,14 @@ export function EventDetailPage() {
       </div>
 
       {/* AI Panel */}
-      <div className="rounded-xl border bg-white p-4 shadow-sm dark:bg-black/20">
+      <div className="glass-card p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-sm font-semibold">AI explanation</div>
             <div className="text-xs text-black/50 dark:text-white/50">
-              {detail.ai_latest?.model_id && isAdmin
+              {detail.ai_latest?.model_id
                 ? `${detail.ai_latest.model_id} • ${detail.ai_latest.prompt_version}`
-                : detail.ai_latest?.output
-                  ? "AI verdict available"
-                  : "No AI output"}
+                : "No AI output"}
             </div>
           </div>
 
@@ -262,77 +257,9 @@ export function EventDetailPage() {
         )}
       </div>
 
-      {/* Trade plan (BETA) */}
-      {detail.trade_plan && (
-        <div className="rounded-xl border bg-white p-4 shadow-sm dark:bg-black/20">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold">
-                Trade plan <span className="ml-2 rounded-full border px-2 py-0.5 text-[10px]">BETA</span>
-              </div>
-              <div className="text-xs text-black/50 dark:text-white/50">Technicals-only suggestions for high-confidence BUY signals.</div>
-            </div>
-          </div>
-          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-            <div className="rounded-lg border p-3">
-              <div className="text-xs text-black/50 dark:text-white/50">Entry (ref)</div>
-              <div className="mt-2 text-sm font-semibold">
-                ${fmtNumber(detail.trade_plan.entry.price, { digits: 2 })}
-              </div>
-              <div className="mt-1 text-xs text-black/50 dark:text-white/50">{fmtDate(detail.trade_plan.entry.date)}</div>
-            </div>
-            <div className="rounded-lg border p-3">
-              <div className="text-xs text-black/50 dark:text-white/50">Stop loss</div>
-              <div className="mt-2 text-sm font-semibold">
-                ${fmtNumber(detail.trade_plan.stop_loss.price, { digits: 2 })}
-              </div>
-              {detail.trade_plan.stop_loss.basis && (
-                <div className="mt-1 text-xs text-black/50 dark:text-white/50">{detail.trade_plan.stop_loss.basis}</div>
-              )}
-            </div>
-            <div className="rounded-lg border p-3">
-              <div className="text-xs text-black/50 dark:text-white/50">Take profit</div>
-              <div className="mt-2 text-sm font-semibold">
-                ${fmtNumber(detail.trade_plan.take_profit.price, { digits: 2 })}
-              </div>
-              {detail.trade_plan.take_profit.basis && (
-                <div className="mt-1 text-xs text-black/50 dark:text-white/50">{detail.trade_plan.take_profit.basis}</div>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div className="rounded-lg border p-3">
-              <div className="text-xs text-black/50 dark:text-white/50">Trim targets</div>
-              <div className="mt-2 space-y-1 text-sm">
-                {(detail.trade_plan.trims ?? []).slice(0, 2).map((t, idx) => (
-                  <div key={idx} className="flex items-center justify-between gap-3">
-                    <div className="text-black/60 dark:text-white/60">Trim {idx + 1}</div>
-                    <div className="font-medium">${fmtNumber(t.price, { digits: 2 })}</div>
-                  </div>
-                ))}
-                {(detail.trade_plan.trims ?? []).length === 0 && <div className="text-black/60 dark:text-white/60">—</div>}
-              </div>
-            </div>
-            <div className="rounded-lg border p-3">
-              <div className="text-xs text-black/50 dark:text-white/50">Notes</div>
-              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-black/70 dark:text-white/70">
-                {(detail.trade_plan.notes ?? [
-                  "BETA feature.",
-                  "Levels are heuristics from daily adjusted closes.",
-                  "Not investment advice.",
-                ]).map((n, idx) => (
-                  <li key={idx}>{n}</li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* AI inputs (exactly what we send to the model) */}
-      {isAdmin && detail.ai_latest?.input && (
-        <div className="rounded-xl border bg-white p-4 shadow-sm dark:bg-black/20">
+      {detail.ai_latest?.input && (
+        <div className="glass-card p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-sm font-semibold">AI inputs</div>
@@ -352,7 +279,7 @@ export function EventDetailPage() {
 
       {/* Raw Form 4 rows */}
       {Array.isArray(detail.rows) && detail.rows.length > 0 && (
-        <div className="rounded-xl border bg-white p-4 shadow-sm dark:bg-black/20">
+        <div className="glass-card p-4">
           <div className="text-sm font-semibold">Raw Form 4 rows ({detail.rows.length})</div>
           <div className="mt-3 overflow-x-auto">
             <table className="min-w-full border-collapse text-xs">
@@ -396,7 +323,7 @@ export function EventDetailPage() {
       )}
 
       {/* Raw keys */}
-      <div className="rounded-xl border bg-white p-4 text-xs text-black/60 shadow-sm dark:bg-black/20 dark:text-white/60">
+      <div className="glass-card p-4 text-xs muted">
         <div>
           <span className="font-medium">issuer_cik</span>: {issuerCik}
         </div>

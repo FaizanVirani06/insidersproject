@@ -1,86 +1,68 @@
 import * as React from "react";
-import { Link, NavLink, useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
-import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/components/auth-provider";
+import { ThemeToggle } from "@/components/theme-toggle";
 
-function linkClass(active: boolean) {
-  return active
-    ? "text-sm font-medium text-black dark:text-white"
-    : "text-sm text-black/60 hover:text-black dark:text-white/60 dark:hover:text-white";
+function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
+  const loc = useLocation();
+  const active = loc.pathname === to;
+  return (
+    <Link
+      to={to}
+      className={
+        active
+          ? "text-zinc-900 dark:text-white"
+          : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"
+      }
+    >
+      {children}
+    </Link>
+  );
 }
 
 export function TopNav() {
-  const { user, loading, logout } = useAuth();
-  const location = useLocation();
-
-  const isApp = location.pathname.startsWith("/app");
+  const { user, logout } = useAuth();
 
   return (
-    <header className="border-b bg-white/70 backdrop-blur dark:bg-black/30">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-        <div className="flex items-center gap-4">
-          <Link to="/" className="font-semibold tracking-tight">
-            Insider Platform
-          </Link>
+    <header className="sticky top-0 z-50 border-b border-zinc-200/70 bg-white/50 backdrop-blur-xl dark:border-zinc-800/50 dark:bg-black/40">
+      <div className="container mx-auto flex h-16 items-center justify-between px-4">
+        <Link to="/" className="flex items-center gap-3">
+          <div className="text-lg font-bold tracking-tight">
+            <span className="bg-gradient-to-r from-purple-500 to-cyan-500 bg-clip-text text-transparent">
+              Form Four Analysis
+            </span>
+          </div>
+          <span className="badge hidden sm:inline-flex">Beta</span>
+        </Link>
 
-          <nav className="hidden items-center gap-3 md:flex">
-            <NavLink to="/pricing" className={({ isActive }) => linkClass(isActive)}>
-              Pricing
-            </NavLink>
-            <NavLink to="/privacy" className={({ isActive }) => linkClass(isActive)}>
-              Privacy
-            </NavLink>
-            <NavLink to="/terms" className={({ isActive }) => linkClass(isActive)}>
-              Terms
-            </NavLink>
-
-            {user && (
-              <>
-                <span className="text-black/20 dark:text-white/20">|</span>
-                <NavLink to="/app" className={() => linkClass(isApp)}>
-                  App
-                </NavLink>
-              </>
-            )}
-          </nav>
-        </div>
+        <nav className="hidden items-center gap-6 text-sm md:flex">
+          <NavLink to="/pricing">Pricing</NavLink>
+          <NavLink to="/privacy">Privacy</NavLink>
+          <NavLink to="/terms">Terms</NavLink>
+        </nav>
 
         <div className="flex items-center gap-2">
           <ThemeToggle />
 
-          {loading ? (
-            <div className="text-sm text-black/60 dark:text-white/60">…</div>
-          ) : user ? (
-            <div className="flex items-center gap-2">
-              <Link
-                to="/app/account"
-                className="hidden rounded-md border px-3 py-2 text-sm hover:bg-black/5 dark:hover:bg-white/5 md:inline-flex"
-              >
-                {user.username}
+          {user ? (
+            <>
+              <Link to="/app" className="btn-secondary hidden sm:inline-flex">
+                Open app
               </Link>
-              <button
-                onClick={() => void logout()}
-                className="rounded-md bg-black px-3 py-2 text-sm font-medium text-white hover:opacity-90 dark:bg-white dark:text-black"
-              >
+              <button type="button" onClick={() => logout()} className="btn-ghost">
                 Logout
               </button>
-            </div>
+            </>
           ) : (
-            <div className="flex items-center gap-2">
-              <Link
-                to="/login"
-                className="rounded-md border px-3 py-2 text-sm hover:bg-black/5 dark:hover:bg-white/5"
-              >
-                Login
+            <>
+              <Link to="/login" className="btn-ghost">
+                Log in
               </Link>
-              <Link
-                to="/signup"
-                className="rounded-md bg-black px-3 py-2 text-sm font-medium text-white hover:opacity-90 dark:bg-white dark:text-black"
-              >
-                Sign up
+              <Link to="/signup" className="btn-primary">
+                Get started
               </Link>
-            </div>
+            </>
           )}
         </div>
       </div>

@@ -70,19 +70,17 @@ export function SignupPage() {
 
   return (
     <div className="mx-auto mt-16 max-w-md">
-      <div className="rounded-xl border bg-white p-6 shadow-sm dark:bg-black/20">
+      <div className="glass-card p-6">
         <h1 className="text-xl font-semibold">Create your account</h1>
-        <p className="mt-1 text-sm text-black/60 dark:text-white/60">
-          Sign up, then subscribe to unlock the insiders dashboard.
-        </p>
+        <p className="mt-1 text-sm muted">Sign up, then subscribe to unlock the insiders dashboard.</p>
 
-        <form onSubmit={onSubmit} className="mt-6 space-y-3">
+        <form onSubmit={onSubmit} className="mt-6 space-y-4">
           <div>
             <label className="block text-sm font-medium">Email</label>
             <input
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="mt-1 w-full rounded-md border bg-transparent px-3 py-2"
+              className="input mt-1"
               autoComplete="email"
               placeholder="you@example.com"
             />
@@ -94,10 +92,10 @@ export function SignupPage() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 w-full rounded-md border bg-transparent px-3 py-2"
+              className="input mt-1"
               autoComplete="new-password"
             />
-            <div className="mt-1 text-xs text-black/50 dark:text-white/50">Minimum 8 characters.</div>
+            <div className="mt-1 text-xs muted">Minimum 8 characters.</div>
           </div>
 
           <div>
@@ -106,7 +104,7 @@ export function SignupPage() {
               type="password"
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
-              className="mt-1 w-full rounded-md border bg-transparent px-3 py-2"
+              className="input mt-1"
               autoComplete="new-password"
             />
           </div>
@@ -117,16 +115,15 @@ export function SignupPage() {
             </div>
           )}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full rounded-md bg-black px-3 py-2 text-sm font-medium text-white disabled:opacity-60 dark:bg-white dark:text-black"
-          >
+          <button type="submit" disabled={loading} className="btn-primary w-full">
             {loading ? "Creating account…" : "Create account"}
           </button>
 
-          <div className="text-xs text-black/60 dark:text-white/60">
-            Already have an account? <Link className="underline" to="/login">Sign in</Link>
+          <div className="text-xs muted">
+            Already have an account?{" "}
+            <Link className="link" to="/login">
+              Sign in
+            </Link>
           </div>
         </form>
       </div>

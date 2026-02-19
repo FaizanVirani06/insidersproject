@@ -48,19 +48,6 @@ export type InsiderEventRow = Record<string, any> & {
   market_cap_bucket?: string | null;
 };
 
-export type TradePlan = {
-  schema_version: string;
-  beta: boolean;
-  signal?: { rating?: number | null; confidence?: number | null };
-  entry: { date: string; price: number; source?: string };
-  stop_loss: { price: number; basis?: string };
-  risk?: { per_share?: number; pct?: number };
-  trims: Array<{ price: number; basis?: string }>;
-  take_profit: { price: number; basis?: string };
-  levels?: Record<string, any>;
-  notes?: string[];
-};
-
 export type EventDetail = {
   event: InsiderEventRow;
   rows: any[];
@@ -68,7 +55,6 @@ export type EventDetail = {
   stats: any[];
   clusters: { buy: any | null; sell: any | null };
   ai_latest: any | null;
-  trade_plan?: TradePlan | null;
 };
 
 export type PricePoint = { date: string; adj_close: number };

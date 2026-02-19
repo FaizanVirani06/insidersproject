@@ -13,6 +13,7 @@ import { SignupPage } from "@/pages/signup";
 import { AppShell } from "@/pages/app/app-shell";
 import { AccountPage } from "@/pages/app/account";
 import { AdminJobsPage } from "@/pages/app/admin-jobs";
+import { AdminMonitoringPage } from "@/pages/app/admin-monitoring";
 import { EventsPage } from "@/pages/app/events";
 import { EventDetailPage } from "@/pages/app/event-detail";
 import { FeedbackPage } from "@/pages/app/feedback";
@@ -61,6 +62,7 @@ export function App() {
 
           {/* Admin routes */}
           <Route element={<RequireAdmin />}>
+            <Route path="admin/monitoring" element={<AdminMonitoringPage />} />
             <Route path="admin/jobs" element={<AdminJobsPage />} />
           </Route>
         </Route>

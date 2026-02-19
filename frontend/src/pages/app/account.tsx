@@ -14,7 +14,7 @@ type PlansResponse = {
 
 export function AccountPage() {
   const { user, refresh } = useAuth();
-  const [sp, setSp] = useSearchParams();
+  const [sp] = useSearchParams();
   const [plans, setPlans] = React.useState<PlansResponse>({ enabled: false });
   const [loadingPlans, setLoadingPlans] = React.useState(true);
   const [busy, setBusy] = React.useState<string | null>(null);
@@ -44,25 +44,13 @@ export function AccountPage() {
     };
   }, []);
 
-  const checkoutParam = (sp.get("checkout") || "").toLowerCase();
-  const handledCheckoutRef = React.useRef(false);
-
   React.useEffect(() => {
-    // Stripe redirects back with ?checkout=success. If we keep that param in the
-    // URL and refresh user state, this effect can fire repeatedly and cause
-    // a "glitchy" re-render loop.
-    if (handledCheckoutRef.current) return;
-    if (checkoutParam === "success") {
-      handledCheckoutRef.current = true;
+    const c = (sp.get("checkout") || "").toLowerCase();
+    if (c === "success") {
       setMsg("Payment successful — refreshing your subscription status…");
-      void refresh();
-
-      // Remove the param from the URL so it doesn't retrigger on re-render.
-      const next = new URLSearchParams(sp);
-      next.delete("checkout");
-      setSp(next, { replace: true } as any);
+      refresh();
     }
-  }, [checkoutParam, refresh, setSp, sp]);
+  }, [sp, refresh]);
 
   const isPaid = Boolean((user as any)?.is_paid) || user?.role === "admin";
   const status = (user as any)?.subscription_status || "";
@@ -114,56 +102,42 @@ export function AccountPage() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl py-10 space-y-6">
+    <div className="mx-auto max-w-3xl space-y-6 py-10">
       <div>
         <h1 className="text-2xl font-semibold">Account</h1>
-        <p className="mt-1 text-sm text-black/60 dark:text-white/60">
-          Manage your subscription and billing.
-        </p>
+        <p className="mt-1 text-sm muted">Manage your subscription and billing.</p>
       </div>
 
-      <div className="rounded-2xl border bg-white p-6 shadow-sm dark:bg-black/20">
+      <div className="glass-panel p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="text-sm font-semibold">Signed in as</div>
-            <div className="mt-1 text-sm text-black/70 dark:text-white/70">{user?.username}</div>
-            <div className="mt-1 text-xs text-black/50 dark:text-white/50">
-              Role: {user?.role}
-            </div>
+            <div className="mt-1 text-sm text-zinc-900 dark:text-zinc-100">{user?.username}</div>
+            <div className="mt-1 text-xs muted">Role: {user?.role}</div>
           </div>
 
           <div className="text-right">
             <div className="text-sm font-semibold">Subscription</div>
             <div className="mt-1 text-sm">
               {isPaid ? (
-                <span className="rounded-full border bg-emerald-500/10 px-2 py-0.5 text-emerald-700 dark:text-emerald-300 border-emerald-500/30">
+                <span className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-emerald-700 dark:text-emerald-300">
                   Active
                 </span>
               ) : (
-                <span className="rounded-full border bg-amber-500/10 px-2 py-0.5 text-amber-700 dark:text-amber-300 border-amber-500/30">
+                <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-amber-700 dark:text-amber-300">
                   Not active
                 </span>
               )}
             </div>
-            {status && (
-              <div className="mt-1 text-xs text-black/50 dark:text-white/50">
-                Status: {String(status)}
-              </div>
-            )}
+            {status && <div className="mt-1 text-xs muted">Status: {String(status)}</div>}
             {(user as any)?.current_period_end && (
-              <div className="mt-1 text-xs text-black/50 dark:text-white/50">
-                Renews: {String((user as any).current_period_end)}
-              </div>
+              <div className="mt-1 text-xs muted">Renews: {String((user as any).current_period_end)}</div>
             )}
           </div>
         </div>
 
         <div className="mt-6 flex flex-wrap gap-3">
-          <button
-            type="button"
-            onClick={() => refresh()}
-            className="rounded-md border px-4 py-2 text-sm hover:bg-black/5 dark:hover:bg-white/5"
-          >
+          <button type="button" onClick={() => refresh()} className="btn-secondary">
             Refresh status
           </button>
 
@@ -173,15 +147,16 @@ export function AccountPage() {
                 type="button"
                 disabled={!plans.monthly || busy !== null}
                 onClick={() => startCheckout("monthly")}
-                className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-60 hover:opacity-90 dark:bg-white dark:text-black"
+                className="btn-primary"
               >
                 {busy === "monthly" ? "Redirecting…" : "Subscribe monthly"}
               </button>
+
               <button
                 type="button"
                 disabled={!plans.yearly || busy !== null}
                 onClick={() => startCheckout("yearly")}
-                className="rounded-md border px-4 py-2 text-sm disabled:opacity-60 hover:bg-black/5 dark:hover:bg-white/5"
+                className="btn-secondary"
               >
                 {busy === "yearly" ? "Redirecting…" : plans.yearly ? "Subscribe yearly" : "Yearly not available"}
               </button>
@@ -189,29 +164,22 @@ export function AccountPage() {
           )}
 
           {isPaid && (user as any)?.stripe_customer_id && (
-            <button
-              type="button"
-              disabled={busy !== null}
-              onClick={() => openPortal()}
-              className="rounded-md border px-4 py-2 text-sm hover:bg-black/5 disabled:opacity-60 dark:hover:bg-white/5"
-            >
+            <button type="button" disabled={busy !== null} onClick={() => openPortal()} className="btn-secondary">
               {busy === "portal" ? "Opening…" : "Manage billing"}
             </button>
           )}
         </div>
 
-        {loadingPlans && (
-          <div className="mt-4 text-sm text-black/60 dark:text-white/60">Loading billing…</div>
-        )}
+        {loadingPlans && <div className="mt-4 text-sm muted">Loading billing…</div>}
 
         {!loadingPlans && !plans.enabled && (
-          <div className="mt-4 rounded-md border bg-black/5 px-3 py-2 text-sm text-black/70 dark:bg-white/5 dark:text-white/70">
-            Billing is not configured. Set Stripe keys in the backend .env.
+          <div className="mt-4 rounded-md border border-zinc-200/70 bg-white/40 px-3 py-2 text-sm text-zinc-800 backdrop-blur-md dark:border-zinc-800/60 dark:bg-black/30 dark:text-zinc-200">
+            Billing is not configured. Set Stripe keys in the backend <span className="font-mono">.env</span>.
           </div>
         )}
 
         {msg && (
-          <div className="mt-4 rounded-md border bg-emerald-500/10 px-3 py-2 text-sm text-emerald-800 dark:text-emerald-200 border-emerald-500/30">
+          <div className="mt-4 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-800 dark:text-emerald-200">
             {msg}
           </div>
         )}
@@ -223,15 +191,13 @@ export function AccountPage() {
         )}
       </div>
 
-      <div className="rounded-xl border bg-black/5 p-4 text-xs text-black/70 dark:bg-white/5 dark:text-white/70">
+      <div className="glass-card p-4 text-xs">
         <div className="font-medium">Troubleshooting</div>
-        <ul className="mt-2 list-disc pl-5 space-y-1">
+        <ul className="mt-2 list-disc space-y-1 pl-5 muted">
           <li>
             If you just paid and the dashboard is still locked, click <span className="font-medium">Refresh status</span>.
           </li>
-          <li>
-            If Stripe webhooks are not configured, your subscription status may not update automatically.
-          </li>
+          <li>If Stripe webhooks are not configured, your subscription status may not update automatically.</li>
         </ul>
       </div>
     </div>

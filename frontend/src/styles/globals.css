@@ -1,28 +1,103 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@layer theme, base, components, utilities;
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
 }
 
-html.dark {
+:root {
+  --background: #ffffff;
+  --foreground: #0a0a0a;
+}
+
+.dark {
   --background: #0a0a0a;
-  --foreground: #ededed;
+  --foreground: #fafafa;
 }
 
-html,
-body {
-  height: 100%;
+@layer base {
+  body {
+    @apply bg-background text-foreground;
+  }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial,
-    "Apple Color Emoji", "Segoe UI Emoji";
+/*
+  Shared UI primitives
+  These classes let us keep a consistent “glass / neon” aesthetic across the app,
+  inspired by the Figma homepage reference.
+*/
+@layer components {
+  .glass-card {
+    @apply rounded-xl border border-zinc-200/70 bg-white/60 shadow-sm backdrop-blur-xl;
+    @apply dark:border-zinc-800/60 dark:bg-black/40;
+  }
+
+  .glass-panel {
+    @apply rounded-2xl border border-zinc-200/70 bg-white/60 shadow-sm backdrop-blur-xl;
+    @apply dark:border-zinc-800/60 dark:bg-black/40;
+  }
+
+  .badge {
+    @apply inline-flex items-center rounded-full border border-zinc-200/70 bg-white/60 px-2 py-0.5 text-xs text-zinc-700 backdrop-blur-md;
+    @apply dark:border-zinc-800/60 dark:bg-black/30 dark:text-zinc-300;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-md bg-gradient-to-r from-purple-500 to-cyan-500 px-4 py-2 text-sm font-medium text-white;
+    @apply shadow-lg shadow-purple-500/20 transition hover:from-purple-600 hover:to-cyan-600 hover:shadow-purple-500/35;
+    @apply disabled:pointer-events-none disabled:opacity-60;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-md border border-zinc-200/80 bg-white/70 px-4 py-2 text-sm font-medium text-zinc-900;
+    @apply shadow-sm backdrop-blur-md transition hover:bg-white/90;
+    @apply disabled:pointer-events-none disabled:opacity-60;
+    @apply dark:border-zinc-800/60 dark:bg-black/30 dark:text-zinc-100 dark:hover:bg-black/45;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-zinc-800;
+    @apply transition hover:bg-zinc-900/5;
+    @apply disabled:pointer-events-none disabled:opacity-60;
+    @apply dark:text-zinc-100 dark:hover:bg-white/5;
+  }
+
+  .btn-icon {
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-md border border-zinc-200/80 bg-white/60;
+    @apply shadow-sm backdrop-blur-md transition hover:bg-white/80;
+    @apply disabled:pointer-events-none disabled:opacity-60;
+    @apply dark:border-zinc-800/60 dark:bg-black/30 dark:hover:bg-black/45;
+  }
+
+  .input {
+    @apply w-full rounded-md border border-zinc-200/80 bg-white/60 px-3 py-2 text-sm text-zinc-900;
+    @apply shadow-sm backdrop-blur-md outline-none transition;
+    @apply focus:border-purple-400/70 focus:ring-2 focus:ring-purple-400/25;
+    @apply dark:border-zinc-800/60 dark:bg-black/30 dark:text-zinc-100;
+  }
+
+  .textarea {
+    @apply w-full rounded-md border border-zinc-200/80 bg-white/60 px-3 py-2 text-sm text-zinc-900;
+    @apply shadow-sm backdrop-blur-md outline-none transition;
+    @apply focus:border-purple-400/70 focus:ring-2 focus:ring-purple-400/25;
+    @apply dark:border-zinc-800/60 dark:bg-black/30 dark:text-zinc-100;
+    @apply min-h-[120px];
+  }
+
+  .muted {
+    @apply text-zinc-600 dark:text-zinc-400;
+  }
+
+  .muted-2 {
+    @apply text-zinc-500 dark:text-zinc-500;
+  }
+
+  .link {
+    @apply text-purple-600 hover:text-purple-700 dark:text-purple-300 dark:hover:text-purple-200;
+  }
 }

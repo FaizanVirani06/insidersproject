@@ -79,8 +79,8 @@ class Config:
     )
 
     # AI generation
-    AI_TEMPERATURE: float = float(os.environ.get("AI_TEMPERATURE", "0.5"))
-    AI_MAX_TOKENS: int = int(os.environ.get("AI_MAX_TOKENS", "5000"))
+    AI_TEMPERATURE: float = float(os.environ.get("AI_TEMPERATURE", "0.2"))
+    AI_MAX_TOKENS: int = int(os.environ.get("AI_MAX_TOKENS", "2048"))
 
     # Yahoo Finance (market cap)
     YAHOO_QUOTE_URL: str = os.environ.get(
@@ -98,18 +98,7 @@ class Config:
 
     AI_INPUT_SCHEMA_VERSION: str = os.environ.get("AI_INPUT_SCHEMA_VERSION", "ai_input_v2")
     AI_OUTPUT_SCHEMA_VERSION: str = os.environ.get("AI_OUTPUT_SCHEMA_VERSION", "ai_output_v1")
-    PROMPT_VERSION: str = os.environ.get("PROMPT_VERSION", "prompt_ai_v4")
-
-    # -----------------
-    # Consumer features
-    # -----------------
-    # "Trade plan" suggestions (technicals-based) are only generated for high-confidence BUY signals.
-    # These are heuristics and should remain conservative.
-    TRADE_PLAN_MIN_BUY_RATING: float = float(os.environ.get("TRADE_PLAN_MIN_BUY_RATING", "8.0"))
-    TRADE_PLAN_MIN_BUY_CONFIDENCE: float = float(os.environ.get("TRADE_PLAN_MIN_BUY_CONFIDENCE", "0.60"))
-
-    # Large 1-day move threshold (used as a rough proxy for "gap" levels when only close data is available).
-    TRADE_PLAN_GAP_PCT_THRESHOLD: float = float(os.environ.get("TRADE_PLAN_GAP_PCT_THRESHOLD", "0.08"))
+    PROMPT_VERSION: str = os.environ.get("PROMPT_VERSION", "prompt_ai_v3")
 
     # Benchmark (excess returns) - used for insider performance stats
     BENCHMARK_SYMBOL: str = os.environ.get("BENCHMARK_SYMBOL", "SPY.US")  # S&P500 proxy

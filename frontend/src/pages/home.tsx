@@ -1,83 +1,95 @@
-import * as React from "react";
 import { Link } from "react-router-dom";
 
-import { useAuth } from "@/components/auth-provider";
-
 export function HomePage() {
-  const { user } = useAuth();
-
   return (
-    <div className="mx-auto max-w-5xl py-20 space-y-10">
-      <div className="space-y-4">
-        <h1 className="text-4xl font-semibold tracking-tight">
-          Insider trading analysis,
-          <span className="block text-black/60 dark:text-white/60">with AI-rated signals.</span>
-        </h1>
-        <p className="text-lg text-black/70 dark:text-white/70">
-          Track Form 4 filings, identify meaningful buys/sells, and review AI-generated summaries.
-        </p>
-        <div className="flex flex-wrap gap-3">
-          {user ? (
-            <Link
-              to="/app"
-              className="rounded-md bg-black px-5 py-3 text-sm font-medium text-white hover:opacity-90 dark:bg-white dark:text-black"
-            >
-              Open app
-            </Link>
-          ) : (
-            <Link
-              to="/signup"
-              className="rounded-md bg-black px-5 py-3 text-sm font-medium text-white hover:opacity-90 dark:bg-white dark:text-black"
-            >
+    <div className="space-y-16">
+      {/* Hero */}
+      <section className="glass-panel relative overflow-hidden p-8 sm:p-12">
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-purple-500/10 via-transparent to-cyan-500/10" />
+        <div className="relative">
+          <div className="badge">Insider signal engine</div>
+
+          <h1 className="mt-6 text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl">
+            Find high-signal Form 4 activity —{" "}
+            <span className="bg-gradient-to-r from-purple-500 to-cyan-500 bg-clip-text text-transparent">
+              faster
+            </span>
+          </h1>
+
+          <p className="mt-6 max-w-2xl text-lg muted">
+            Track insider trades, cluster buys/sells, and generate concise AI summaries that help you triage what matters.
+            Built for speed, transparency, and operator-grade backfills.
+          </p>
+
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+            <Link to="/signup" className="btn-primary">
               Get started
             </Link>
-          )}
-          <Link
-            to="/pricing"
-            className="rounded-md border px-5 py-3 text-sm hover:bg-black/5 dark:hover:bg-white/5"
-          >
-            View pricing
-          </Link>
-        </div>
-      </div>
+            <Link to="/pricing" className="btn-secondary">
+              View pricing
+            </Link>
+          </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <div className="rounded-2xl border bg-white p-5 shadow-sm dark:bg-black/20">
-          <div className="text-sm font-medium">Signal scoring</div>
-          <div className="mt-2 text-sm text-black/70 dark:text-white/70">
-            AI ratings + confidence scores help you triage filings faster.
-          </div>
-        </div>
-        <div className="rounded-2xl border bg-white p-5 shadow-sm dark:bg-black/20">
-          <div className="text-sm font-medium">Clusters</div>
-          <div className="mt-2 text-sm text-black/70 dark:text-white/70">
-            Spot clustered insider activity across officers/directors.
-          </div>
-        </div>
-        <div className="rounded-2xl border bg-white p-5 shadow-sm dark:bg-black/20">
-          <div className="text-sm font-medium">Outcomes</div>
-          <div className="mt-2 text-sm text-black/70 dark:text-white/70">
-            Review historical outcomes around filings and trade dates.
-          </div>
-        </div>
-      </div>
-
-      <div className="rounded-2xl border bg-white p-6 shadow-sm dark:bg-black/20">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="text-sm font-medium">Ready to try it?</div>
-            <div className="mt-1 text-sm text-black/70 dark:text-white/70">
-              Create an account and start exploring tickers.
+          <div className="mt-10 grid gap-4 sm:grid-cols-3">
+            <div className="glass-card p-4">
+              <div className="text-sm font-semibold">Real-time discovery</div>
+              <div className="mt-1 text-sm muted">
+                Poll the SEC feed, enqueue jobs, and process new filings continuously.
+              </div>
+            </div>
+            <div className="glass-card p-4">
+              <div className="text-sm font-semibold">Cluster detection</div>
+              <div className="mt-1 text-sm muted">
+                Aggregate insiders across a window to surface stronger, multi-actor signals.
+              </div>
+            </div>
+            <div className="glass-card p-4">
+              <div className="text-sm font-semibold">AI summaries</div>
+              <div className="mt-1 text-sm muted">
+                Structured outputs + ratings for rapid decision-making and consistent UX.
+              </div>
             </div>
           </div>
-          <Link
-            to={user ? "/app" : "/signup"}
-            className="shrink-0 rounded-md bg-black px-4 py-2 text-sm font-medium text-white hover:opacity-90 dark:bg-white dark:text-black"
-          >
-            {user ? "Go to app" : "Sign up"}
+        </div>
+      </section>
+
+      {/* Feature grid */}
+      <section className="grid gap-6 md:grid-cols-3">
+        <div className="glass-card p-6">
+          <div className="text-sm font-semibold">Built for backfills</div>
+          <p className="mt-2 text-sm muted">
+            Backfill issuer histories with resumable jobs and dedupe keys, so you can scale to thousands of tickers.
+          </p>
+        </div>
+
+        <div className="glass-card p-6">
+          <div className="text-sm font-semibold">Explainable scoring</div>
+          <p className="mt-2 text-sm muted">
+            Ratings are tied to concrete factors: insider role, buy/sell size, clustering, and market context.
+          </p>
+        </div>
+
+        <div className="glass-card p-6">
+          <div className="text-sm font-semibold">Admin monitoring</div>
+          <p className="mt-2 text-sm muted">
+            Track job backlogs, throughput, latency, and errors so you know when to run more workers.
+          </p>
+        </div>
+      </section>
+
+      {/* CTA */}
+      <section className="glass-panel relative overflow-hidden p-8">
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-purple-500/10 to-cyan-500/10" />
+        <div className="relative flex flex-col items-start justify-between gap-6 sm:flex-row sm:items-center">
+          <div>
+            <div className="text-xl font-semibold">Ready to explore the feed?</div>
+            <div className="mt-1 text-sm muted">Create an account, subscribe, and unlock the full dashboard.</div>
+          </div>
+          <Link to="/signup" className="btn-primary">
+            Create account
           </Link>
         </div>
-      </div>
+      </section>
     </div>
   );
 }
