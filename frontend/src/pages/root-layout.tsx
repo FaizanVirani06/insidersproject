@@ -16,7 +16,7 @@ export function RootLayout() {
 
       <footer className="border-t border-zinc-200/70 bg-white/40 backdrop-blur-xl dark:border-zinc-800/50 dark:bg-black/30">
         <div className="container mx-auto flex flex-col gap-2 px-4 py-6 text-sm sm:flex-row sm:items-center sm:justify-between">
-          <div className="muted">© {new Date().getFullYear()} Form Four Analysis</div>
+          <div className="muted">© {new Date().getFullYear()} InsidrsAI</div>
           <div className="flex items-center gap-4">
             <Link to="/privacy" className="link">
               Privacy

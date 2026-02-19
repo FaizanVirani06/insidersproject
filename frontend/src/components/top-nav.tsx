@@ -30,7 +30,7 @@ export function TopNav() {
         <Link to="/" className="flex items-center gap-3">
           <div className="text-lg font-bold tracking-tight">
             <span className="bg-gradient-to-r from-purple-500 to-cyan-500 bg-clip-text text-transparent">
-              Form Four Analysis
+              InsidrsAI
             </span>
           </div>
           <span className="badge hidden sm:inline-flex">Beta</span>
