@@ -55,11 +55,11 @@ export function RegenerateAIButton({
             setBusy(false);
           }
         }}
-        className="inline-flex items-center justify-center rounded bg-black px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+        className="btn-secondary disabled:opacity-50"
       >
         Regenerate AI
       </button>
-      {status ? <p className="text-xs text-black/60">{status}</p> : null}
+      {status ? <p className="text-xs muted">{status}</p> : null}
     </div>
   );
 }

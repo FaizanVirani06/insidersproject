@@ -1,27 +1,83 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { apiFetch } from "@/lib/api";
 
+type PricingDisplay = {
+  currency: string;
+  monthly_usd: number;
+  yearly_usd: number;
+};
+
 export function PricingPage() {
+  const navigate = useNavigate();
+
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [billingCadence, setBillingCadence] = React.useState<"monthly" | "yearly">("yearly");
 
-  const start = async () => {
+  const [billingPlans, setBillingPlans] = React.useState<{ monthly: string | null; yearly: string | null } | null>(
+    null
+  );
+  const [display, setDisplay] = React.useState<PricingDisplay | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [plansRes, displayRes] = await Promise.all([
+          apiFetch("/billing/plans", { cache: "no-store" }),
+          apiFetch("/public/pricing-display", { cache: "no-store" }),
+        ]);
+
+        if (cancelled) return;
+
+        if (plansRes.ok) {
+          const p = await plansRes.json();
+          setBillingPlans({ monthly: p?.monthly ?? null, yearly: p?.yearly ?? null });
+        }
+        if (displayRes.ok) {
+          const d = (await displayRes.json()) as PricingDisplay;
+          setDisplay(d);
+        }
+      } catch {
+        // Non-fatal; page has fallbacks.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const currency = display?.currency || "USD";
+  const monthlyUsd = typeof display?.monthly_usd === "number" ? display!.monthly_usd : 25;
+  const yearlyUsd = typeof display?.yearly_usd === "number" ? display!.yearly_usd : 200;
+  const monthlyAvailable = Boolean(billingPlans?.monthly);
+  const yearlyAvailable = Boolean(billingPlans?.yearly);
+
+  const features = [
+    "AI-rated Form 4 buy/sell signals",
+    "Latest filings feed + filters",
+    "Cluster detection",
+    "Price charts + measured outcomes",
+    "Insider performance stats",
+    "Technical trade plan (stop, trims, take-profit)",
+    "In-app support chat",
+  ];
+
+  const start = async (plan: "monthly" | "yearly") => {
     setLoading(true);
     setError(null);
     try {
-      // If the user is already logged in, this will create a checkout session.
-      // If not, they'll be prompted to sign up first.
-      const res = await apiFetch("/api/backend/billing/checkout-session", {
+      const res = await apiFetch("/billing/checkout-session", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ plan: "yearly" }),
+        body: JSON.stringify({ plan }),
       });
 
       if (res.status === 401) {
-        // Not signed in
-        window.location.href = "/signup";
+        navigate("/signup?next=/pricing", { replace: true });
         return;
       }
 
@@ -43,24 +99,15 @@ export function PricingPage() {
     }
   };
 
-  const features = [
-    "Real-time Form 4 discovery",
-    "Clustered buy/sell events",
-    "AI summaries + ratings",
-    "Backfill pipeline",
-    "Admin job monitoring",
-  ];
+  const activePrice = billingCadence === "monthly" ? monthlyUsd : yearlyUsd;
+  const activeAvailable = billingCadence === "monthly" ? monthlyAvailable : yearlyAvailable;
 
   return (
-    <div className="mx-auto max-w-4xl space-y-10">
+    <div className="mx-auto max-w-5xl space-y-10">
       <div className="text-center">
         <div className="badge">Simple pricing</div>
-        <h1 className="mt-5 text-4xl font-bold tracking-tight">
-          Unlock the dashboard and AI insights
-        </h1>
-        <p className="mt-4 text-lg muted">
-          Annual plan — built for power users who want continuous filings + monitoring.
-        </p>
+        <h1 className="mt-5 text-4xl font-bold tracking-tight">Unlock the dashboard and AI insights</h1>
+        <p className="mt-4 text-lg muted">Choose monthly or yearly. Cancel anytime.</p>
       </div>
 
       <div className="glass-panel relative overflow-hidden p-8 sm:p-10">
@@ -68,20 +115,46 @@ export function PricingPage() {
 
         <div className="relative grid gap-8 md:grid-cols-2 md:items-start">
           <div>
-            <div className="text-sm font-semibold">Pro</div>
-            <div className="mt-2 flex items-baseline gap-2">
-              <span className="text-4xl font-bold">$200</span>
-              <span className="text-sm muted">/ year</span>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm font-semibold">InsidrsAI Pro</div>
+              {billingCadence === "yearly" && <span className="badge">Best value</span>}
             </div>
-            <div className="mt-3 text-sm muted">Cancel anytime in Stripe Billing Portal.</div>
+
+            <div className="mt-4 inline-flex rounded-lg border border-zinc-200/70 bg-white/50 p-1 dark:border-zinc-800/60 dark:bg-black/30">
+              <button
+                type="button"
+                onClick={() => setBillingCadence("monthly")}
+                className={billingCadence === "monthly" ? "btn-secondary h-9 px-4" : "btn-ghost h-9 px-4"}
+              >
+                Monthly
+              </button>
+              <button
+                type="button"
+                onClick={() => setBillingCadence("yearly")}
+                className={billingCadence === "yearly" ? "btn-secondary h-9 px-4" : "btn-ghost h-9 px-4"}
+              >
+                Yearly
+              </button>
+            </div>
+
+            <div className="mt-4 flex items-baseline gap-2">
+              <span className="text-4xl font-bold">
+                {currency === "USD" ? "$" : ""}
+                {activePrice.toLocaleString()}
+              </span>
+              <span className="text-sm muted">/ {billingCadence === "monthly" ? "month" : "year"}</span>
+            </div>
+            {currency !== "USD" && <div className="mt-2 text-xs muted">Currency: {currency}</div>}
+            <div className="mt-3 text-sm muted">Secure checkout + subscription management via Stripe.</div>
 
             <button
               type="button"
-              onClick={start}
-              disabled={loading}
+              onClick={() => start(billingCadence)}
+              disabled={loading || !activeAvailable}
               className="btn-primary mt-6 w-full"
+              title={!activeAvailable ? "This plan is not configured" : undefined}
             >
-              {loading ? "Redirecting…" : "Subscribe"}
+              {loading ? "Redirecting…" : activeAvailable ? "Subscribe" : "Plan unavailable"}
             </button>
 
             <div className="mt-3 text-xs muted">
@@ -110,22 +183,14 @@ export function PricingPage() {
             </ul>
 
             <div className="mt-6 text-xs muted">
-              Billing is handled by Stripe. Webhook events keep your subscription state in sync.
+              By subscribing you agree to our{" "}
+              <Link to="/legal" className="link">
+                Privacy + Terms
+              </Link>
+              .
             </div>
           </div>
         </div>
-      </div>
-
-      <div className="text-center text-sm muted">
-        Questions? Check the{" "}
-        <Link to="/terms" className="link">
-          Terms
-        </Link>
-        {" "}or{" "}
-        <Link to="/privacy" className="link">
-          Privacy Policy
-        </Link>
-        .
       </div>
     </div>
   );

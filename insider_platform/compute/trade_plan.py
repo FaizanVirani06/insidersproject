@@ -61,22 +61,37 @@ def _safe_float(x: Any) -> Optional[float]:
         return None
 
 
-def _extract_buy_signal_strength(ai_output: Optional[Dict[str, Any]]) -> Tuple[Optional[float], Optional[float]]:
-    """Return (rating, confidence) from ai_output.verdict.buy_signal when present."""
-    if not isinstance(ai_output, dict):
-        return (None, None)
-    verdict = ai_output.get("verdict")
-    if not isinstance(verdict, dict):
-        return (None, None)
-    buy = verdict.get("buy_signal")
-    if not isinstance(buy, dict):
-        return (None, None)
-    rating = _safe_float(buy.get("rating"))
-    conf = _safe_float(buy.get("confidence"))
-    status = str(buy.get("status") or "").strip().lower()
-    if status not in ("applicable", "insufficient_data"):
-        # not_applicable
-        return (None, None)
+def _extract_buy_signal_strength(
+    ai_output: Optional[Dict[str, Any]],
+    event: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[float], Optional[float]]:
+    """Best-effort extraction of buy rating/confidence.
+
+    Priority:
+      1) AI verdict JSON (if present)
+      2) precomputed event fields (ai_buy_rating / ai_confidence)
+    """
+
+    rating: Optional[float] = None
+    conf: Optional[float] = None
+
+    if isinstance(ai_output, dict):
+        verdict = ai_output.get("verdict")
+        if isinstance(verdict, dict):
+            buy = verdict.get("buy_signal")
+            if isinstance(buy, dict):
+                status = str(buy.get("status") or "").strip().lower()
+                if status in ("applicable", "insufficient_data"):
+                    rating = _safe_float(buy.get("rating"))
+                    conf = _safe_float(buy.get("confidence"))
+
+    if event is not None:
+        # Fall back to cached event fields when AI verdict isn't present.
+        if rating is None:
+            rating = _safe_float(event.get("ai_buy_rating"))
+        if conf is None:
+            conf = _safe_float(event.get("ai_confidence"))
+
     return (rating, conf)
 
 
@@ -137,27 +152,57 @@ def compute_trade_plan_for_event(
     event: Dict[str, Any],
     *,
     ai_output: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """Compute a technicals-only trade plan for a single event.
 
-    Returns None when ineligible or when there is insufficient price history.
+    This function always returns a dict:
+      - {eligible: True, ...levels...} when a plan can be produced
+      - {eligible: False, reason: "..."} when it cannot
     """
+
+    def _ineligible(reason: str, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        out: Dict[str, Any] = {
+            "schema_version": "trade_plan_v1",
+            "beta": True,
+            "eligible": False,
+            "reason": reason,
+        }
+        if extra:
+            out.update(extra)
+        return out
 
     # Eligibility: only BUY events
     if int(event.get("has_buy") or 0) != 1:
-        return None
+        return _ineligible("No buy activity for this event.")
 
-    rating, confidence = _extract_buy_signal_strength(ai_output)
-    if rating is None or confidence is None:
-        return None
-    if rating < float(getattr(cfg, "TRADE_PLAN_MIN_BUY_RATING", 8.0)):
-        return None
-    if confidence < float(getattr(cfg, "TRADE_PLAN_MIN_BUY_CONFIDENCE", 0.60)):
-        return None
+    rating, confidence = _extract_buy_signal_strength(ai_output, event)
+    # If we have rating/confidence, enforce thresholds. If missing, still compute a
+    # technical plan (the levels are independent of AI).
+    if rating is not None and confidence is not None:
+        if rating < float(getattr(cfg, "TRADE_PLAN_MIN_BUY_RATING", 8.0)):
+            return _ineligible(
+                "Buy rating below threshold.",
+                extra={
+                    "signal": {
+                        "rating": round(float(rating), 1),
+                        "confidence": _clamp(float(confidence), 0.0, 1.0),
+                    }
+                },
+            )
+        if confidence < float(getattr(cfg, "TRADE_PLAN_MIN_BUY_CONFIDENCE", 0.60)):
+            return _ineligible(
+                "Confidence below threshold.",
+                extra={
+                    "signal": {
+                        "rating": round(float(rating), 1),
+                        "confidence": _clamp(float(confidence), 0.0, 1.0),
+                    }
+                },
+            )
 
     issuer_cik = str(event.get("issuer_cik") or "").zfill(10)
     if not issuer_cik:
-        return None
+        return _ineligible("Missing issuer CIK.")
 
     # Use trend anchor date when available; otherwise fall back.
     target_date = (
@@ -171,27 +216,27 @@ def compute_trade_plan_for_event(
         # validate
         date.fromisoformat(target_date)
     except Exception:
-        return None
+        return _ineligible("Invalid event date for trade plan anchor.")
 
     entry_row = _fetch_entry_price(conn, issuer_cik, target_date)
     if entry_row is None:
-        return None
+        return _ineligible("Missing entry price / price history.")
 
     entry_date = str(entry_row["date"])
     entry = float(entry_row["adj_close"])
     if not (entry > 0):
-        return None
+        return _ineligible("Invalid entry price.")
 
     series = _fetch_lookback_closes(conn, issuer_cik, entry_date, limit=420)
     if len(series) < 40:
         # Not enough context for reasonable levels.
-        return None
+        return _ineligible("Insufficient price history for technical levels.")
 
     closes = [px for _, px in series]
     # Entry is last point.
     pre = closes[:-1]
     if len(pre) < 20:
-        return None
+        return _ineligible("Insufficient pre-entry history for technical levels.")
 
     def _window(vals: List[float], n: int) -> List[float]:
         if len(vals) <= n:
@@ -215,14 +260,14 @@ def compute_trade_plan_for_event(
 
     # Basic sanity
     if stop >= entry:
-        return None
+        return _ineligible("Could not compute a sane stop-loss level.")
 
     risk = entry - stop
     risk_pct = risk / entry
     # Avoid absurdly wide stops.
     if risk_pct > 0.35:
         # If we'd risk >35% from entry to stop, don't suggest anything.
-        return None
+        return _ineligible("Stop-loss would be too wide (>35% risk).")
 
     # "Liquidity gap" proxy: large down moves in closes. Treat the prior close as an overhead level.
     gap_thr = float(getattr(cfg, "TRADE_PLAN_GAP_PCT_THRESHOLD", 0.08))
@@ -289,9 +334,18 @@ def compute_trade_plan_for_event(
         trim2 = (t2, "2R extension")
         tp_pick = (tp, "3R extension")
 
+    notes: List[str] = [
+        "BETA: Technical levels are heuristics based on daily adjusted closes only.",
+        "Not investment advice. Consider liquidity, volatility, and your risk tolerance.",
+    ]
+    if rating is None or confidence is None:
+        notes.insert(0, "AI signal not available; plan generated from technicals only.")
+
     return {
         "schema_version": "trade_plan_v1",
         "beta": True,
+        "eligible": True,
+        "reason": "ok",
         "signal": {
             "rating": round(float(rating), 1) if rating is not None else None,
             "confidence": _clamp(float(confidence), 0.0, 1.0) if confidence is not None else None,
@@ -326,8 +380,5 @@ def compute_trade_plan_for_event(
                 if p > 0
             ][:5],
         },
-        "notes": [
-            "BETA: Technical levels are heuristics based on daily adjusted closes only.",
-            "Not investment advice. Consider liquidity, volatility, and your risk tolerance.",
-        ],
+        "notes": notes,
     }

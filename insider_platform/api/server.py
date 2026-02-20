@@ -11,9 +11,11 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
 from insider_platform.config import Config, load_config
-from insider_platform.db import connect, init_db
+from insider_platform.db import connect, init_db, get_app_config, upsert_app_config
 from insider_platform.util.time import utcnow_iso
 from insider_platform.jobs.queue import enqueue_job
+
+from insider_platform.compute.trade_plan import compute_trade_plan_for_event
 
 from insider_platform.auth import get_current_user, require_admin, require_subscription
 from insider_platform.auth.crud import (
@@ -273,6 +275,107 @@ class CheckoutSessionRequest(BaseModel):
     plan: str = "monthly"  # monthly|yearly
 
 
+class PricingDisplayUpdateRequest(BaseModel):
+    """Admin-controlled display prices shown on the marketing pricing page.
+
+    NOTE: This does *not* change Stripe pricing. It's purely a website display setting
+    so pricing copy can be updated without a deploy.
+    """
+
+    monthly_usd: float | None = None
+    yearly_usd: float | None = None
+    currency: str | None = None  # default: USD
+
+
+def _parse_display_price(raw: str | None, default: float) -> float:
+    if raw is None:
+        return float(default)
+    try:
+        v = float(str(raw).strip())
+        if not (v > 0):
+            return float(default)
+        # Keep it sane
+        if v > 100000:
+            return float(default)
+        return float(v)
+    except Exception:
+        return float(default)
+
+
+@app.get("/public/pricing-display")
+def public_pricing_display() -> Dict[str, Any]:
+    """Public endpoint for marketing UI.
+
+    Returns the admin-configured *display* prices.
+    """
+
+    DEFAULT_MONTHLY = 25.0
+    DEFAULT_YEARLY = 200.0
+
+    with connect(cfg.DB_DSN) as conn:
+        monthly_raw = get_app_config(conn, "pricing_display_monthly_usd")
+        yearly_raw = get_app_config(conn, "pricing_display_yearly_usd")
+        currency = (get_app_config(conn, "pricing_display_currency") or "USD").strip().upper()
+
+    if not currency:
+        currency = "USD"
+
+    return {
+        "currency": currency,
+        "monthly_usd": _parse_display_price(monthly_raw, DEFAULT_MONTHLY),
+        "yearly_usd": _parse_display_price(yearly_raw, DEFAULT_YEARLY),
+    }
+
+
+@app.post("/admin/site/pricing-display")
+def admin_update_pricing_display(
+    payload: PricingDisplayUpdateRequest,
+    _admin: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Admin endpoint to update marketing display prices."""
+
+    def _validate_price(v: float | None) -> float | None:
+        if v is None:
+            return None
+        try:
+            x = float(v)
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid_price")
+        if not (x > 0):
+            raise HTTPException(status_code=400, detail="price_must_be_positive")
+        if x > 100000:
+            raise HTTPException(status_code=400, detail="price_too_large")
+        return float(x)
+
+    monthly = _validate_price(payload.monthly_usd)
+    yearly = _validate_price(payload.yearly_usd)
+    currency = (payload.currency or "").strip().upper() if payload.currency is not None else None
+    if currency is not None and (len(currency) < 3 or len(currency) > 6):
+        raise HTTPException(status_code=400, detail="invalid_currency")
+
+    with connect(cfg.DB_DSN) as conn:
+        if monthly is not None:
+            upsert_app_config(conn, "pricing_display_monthly_usd", str(monthly))
+        if yearly is not None:
+            upsert_app_config(conn, "pricing_display_yearly_usd", str(yearly))
+        if currency is not None:
+            upsert_app_config(conn, "pricing_display_currency", currency)
+
+        # Return the updated values
+        monthly_raw = get_app_config(conn, "pricing_display_monthly_usd")
+        yearly_raw = get_app_config(conn, "pricing_display_yearly_usd")
+        cur = (get_app_config(conn, "pricing_display_currency") or "USD").strip().upper()
+
+    return {
+        "ok": True,
+        "pricing": {
+            "currency": cur,
+            "monthly_usd": _parse_display_price(monthly_raw, 25.0),
+            "yearly_usd": _parse_display_price(yearly_raw, 200.0),
+        },
+    }
+
+
 @app.get("/billing/plans")
 def billing_plans() -> Dict[str, Any]:
     """Expose configured plan price IDs so the frontend can render pricing."""
@@ -427,6 +530,299 @@ def admin_list_feedback(
             (limit,),
         ).fetchall()
         return {"feedback": [dict(r) for r in rows]}
+
+
+# -----------------------------
+# Support chat
+# -----------------------------
+
+
+class SupportMessageRequest(BaseModel):
+    message: str
+
+
+class AdminSupportReplyRequest(BaseModel):
+    message: str
+    close_thread: bool | None = None
+
+
+def _insert_row_id(conn: Any, *, dialect: str, insert_sql: str, params: tuple[Any, ...], id_col: str) -> int:
+    """Insert a row and return its generated id (sqlite + postgres)."""
+
+    if dialect == "postgres":
+        r = conn.execute(insert_sql + f" RETURNING {id_col}", params).fetchone()
+        if not r or r.get(id_col) is None:
+            raise RuntimeError("insert_failed")
+        return int(r[id_col])
+
+    conn.execute(insert_sql, params)
+    r = conn.execute("SELECT last_insert_rowid() AS id").fetchone()
+    return int(r["id"]) if r is not None else 0
+
+
+@app.get("/support/thread")
+def support_get_thread(
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Get the current user's latest support thread + messages."""
+
+    user_id = int(user.get("user_id"))
+    with connect(cfg.DB_DSN) as conn:
+        dialect = str(getattr(conn, "dialect", "sqlite"))
+        thread = conn.execute(
+            """
+            SELECT *
+            FROM support_threads
+            WHERE user_id=?
+            ORDER BY (status='open') DESC, updated_at DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+
+        if thread is None:
+            return {"thread": None, "messages": []}
+
+        tid = int(thread["thread_id"])
+        msgs = conn.execute(
+            """
+            SELECT message_id, thread_id, sender_role, sender_user_id, message, created_at
+            FROM support_messages
+            WHERE thread_id=?
+            ORDER BY created_at ASC, message_id ASC
+            """,
+            (tid,),
+        ).fetchall()
+
+        return {"thread": dict(thread), "messages": [dict(m) for m in msgs]}
+
+
+@app.post("/support/message")
+def support_send_message(
+    payload: SupportMessageRequest,
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Send a support message as the current user.
+
+    If there is no open thread, a new one is created.
+    """
+
+    msg = (payload.message or "").strip()
+    if len(msg) < 1:
+        raise HTTPException(status_code=400, detail="message_too_short")
+    if len(msg) > 4000:
+        raise HTTPException(status_code=400, detail="message_too_long")
+
+    user_id = int(user.get("user_id"))
+    now = utcnow_iso()
+
+    with connect(cfg.DB_DSN) as conn:
+        dialect = str(getattr(conn, "dialect", "sqlite"))
+
+        thread = conn.execute(
+            """
+            SELECT *
+            FROM support_threads
+            WHERE user_id=? AND status='open'
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+
+        if thread is None:
+            tid = _insert_row_id(
+                conn,
+                dialect=dialect,
+                insert_sql="""
+                INSERT INTO support_threads (user_id, status, created_at, updated_at, last_message_at)
+                VALUES (?,?,?,?,?)
+                """.strip(),
+                params=(user_id, "open", now, now, now),
+                id_col="thread_id",
+            )
+        else:
+            tid = int(thread["thread_id"])
+
+        mid = _insert_row_id(
+            conn,
+            dialect=dialect,
+            insert_sql="""
+            INSERT INTO support_messages (thread_id, sender_role, sender_user_id, message, created_at)
+            VALUES (?,?,?,?,?)
+            """.strip(),
+            params=(tid, "user", user_id, msg, now),
+            id_col="message_id",
+        )
+
+        conn.execute(
+            """
+            UPDATE support_threads
+            SET updated_at=?, last_message_at=?
+            WHERE thread_id=?
+            """,
+            (now, now, tid),
+        )
+
+        return {"ok": True, "thread_id": tid, "message_id": mid, "created_at": now}
+
+
+@app.get("/admin/support/threads")
+def admin_support_threads(
+    status: str | None = Query(None, description="open|closed"),
+    limit: int = Query(50, ge=1, le=200),
+    _admin: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    st = (status or "").strip().lower() or None
+    if st is not None and st not in ("open", "closed"):
+        raise HTTPException(status_code=400, detail="invalid_status")
+
+    with connect(cfg.DB_DSN) as conn:
+        where = ""
+        params: list[Any] = []
+        if st is not None:
+            where = "WHERE t.status=?"
+            params.append(st)
+
+        rows = conn.execute(
+            f"""
+            SELECT
+              t.thread_id,
+              t.user_id,
+              u.username,
+              t.status,
+              t.created_at,
+              t.updated_at,
+              t.last_message_at,
+              (
+                SELECT m.message
+                FROM support_messages m
+                WHERE m.thread_id=t.thread_id
+                ORDER BY m.created_at DESC, m.message_id DESC
+                LIMIT 1
+              ) AS last_message,
+              (
+                SELECT m.sender_role
+                FROM support_messages m
+                WHERE m.thread_id=t.thread_id
+                ORDER BY m.created_at DESC, m.message_id DESC
+                LIMIT 1
+              ) AS last_sender_role,
+              (
+                SELECT COUNT(*)
+                FROM support_messages m
+                WHERE m.thread_id=t.thread_id
+              ) AS message_count
+            FROM support_threads t
+            JOIN users u ON u.user_id = t.user_id
+            {where}
+            ORDER BY COALESCE(t.last_message_at, t.updated_at) DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        ).fetchall()
+
+        return {"threads": [dict(r) for r in rows]}
+
+
+@app.get("/admin/support/thread/{thread_id}")
+def admin_support_thread_detail(
+    thread_id: int,
+    _admin: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    tid = int(thread_id)
+    with connect(cfg.DB_DSN) as conn:
+        thread = conn.execute(
+            """
+            SELECT t.*, u.username
+            FROM support_threads t
+            JOIN users u ON u.user_id = t.user_id
+            WHERE t.thread_id=?
+            """,
+            (tid,),
+        ).fetchone()
+        if thread is None:
+            raise HTTPException(status_code=404, detail="thread_not_found")
+
+        msgs = conn.execute(
+            """
+            SELECT
+              m.message_id,
+              m.thread_id,
+              m.sender_role,
+              m.sender_user_id,
+              su.username AS sender_username,
+              m.message,
+              m.created_at
+            FROM support_messages m
+            LEFT JOIN users su ON su.user_id = m.sender_user_id
+            WHERE m.thread_id=?
+            ORDER BY m.created_at ASC, m.message_id ASC
+            """,
+            (tid,),
+        ).fetchall()
+
+        return {"thread": dict(thread), "messages": [dict(m) for m in msgs]}
+
+
+@app.post("/admin/support/thread/{thread_id}/message")
+def admin_support_reply(
+    thread_id: int,
+    payload: AdminSupportReplyRequest,
+    admin: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    tid = int(thread_id)
+    msg = (payload.message or "").strip()
+    if len(msg) < 1:
+        raise HTTPException(status_code=400, detail="message_too_short")
+    if len(msg) > 4000:
+        raise HTTPException(status_code=400, detail="message_too_long")
+
+    now = utcnow_iso()
+    admin_id = int(admin.get("user_id"))
+
+    with connect(cfg.DB_DSN) as conn:
+        dialect = str(getattr(conn, "dialect", "sqlite"))
+        thread = conn.execute(
+            "SELECT * FROM support_threads WHERE thread_id=?",
+            (tid,),
+        ).fetchone()
+        if thread is None:
+            raise HTTPException(status_code=404, detail="thread_not_found")
+
+        mid = _insert_row_id(
+            conn,
+            dialect=dialect,
+            insert_sql="""
+            INSERT INTO support_messages (thread_id, sender_role, sender_user_id, message, created_at)
+            VALUES (?,?,?,?,?)
+            """.strip(),
+            params=(tid, "admin", admin_id, msg, now),
+            id_col="message_id",
+        )
+
+        # Optionally close the thread
+        close = payload.close_thread is True
+        if close:
+            conn.execute(
+                """
+                UPDATE support_threads
+                SET status='closed', updated_at=?, last_message_at=?
+                WHERE thread_id=?
+                """,
+                (now, now, tid),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE support_threads
+                SET updated_at=?, last_message_at=?
+                WHERE thread_id=?
+                """,
+                (now, now, tid),
+            )
+
+        return {"ok": True, "thread_id": tid, "message_id": mid, "created_at": now, "closed": close}
 
 
 # -----------------------------
@@ -622,16 +1018,25 @@ def ticker_events(
                 where.append("(COALESCE(e.buy_dollars_total,0) >= ? OR COALESCE(e.sell_dollars_total,0) >= ?)")
                 params.extend([md, md])
 
+
         where_sql = " AND ".join(where)
+
+        # For sorting we historically treated "no AI rating" as -1.
+        # But that sentinel should not leak into the API payload; use NULL for display.
+        best_ai_expr = (
+            "CASE WHEN e.ai_buy_rating IS NULL AND e.ai_sell_rating IS NULL "
+            "THEN NULL "
+            "ELSE GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1)) END"
+        )
 
         order_sql = ""
         if sort_by == "filing_date_desc":
             order_sql = "ORDER BY e.filing_date DESC, e.event_trade_date DESC"
         else:
-            # best AI rating is scalar max() of buy/sell ratings (null -> -1)
+            # Sort missing ratings to the bottom, but keep the API value NULL.
             order_sql = """
             ORDER BY
-              GREATEST(COALESCE(e.ai_buy_rating, -1), COALESCE(e.ai_sell_rating, -1)) as ai_best,
+              COALESCE(best_ai_rating, -1) DESC,
               COALESCE(e.ai_confidence,-1) DESC,
               e.filing_date DESC
             """
@@ -647,7 +1052,8 @@ def ticker_events(
             f"""
             SELECT
               e.*,
-              GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1)) AS ai_best
+              {best_ai_expr} AS best_ai_rating,
+              {best_ai_expr} AS ai_best
             FROM insider_events e
             WHERE {where_sql}
             {order_sql}
@@ -688,20 +1094,25 @@ def list_events(
     offset: int = Query(0, ge=0, le=50000),
     open_market_only: bool = True,
     cluster_only: bool = False,
-    ai_only: bool = True,
-    sort_by: str = Query("ai_best_desc"),
+    ai_only: bool = False,
+    side: str = Query("both"),
+    sort_by: str = Query("filing_date_desc"),
     user: Dict[str, Any] = Depends(require_subscription),
 ) -> Dict[str, Any]:
     """Global events feed, intended for "Top signals" style views.
 
     Defaults:
       - last 30 days
-      - ai_only=True
-      - sorted by best AI rating desc
+      - sorted by most recent filing
+      - ai_only=False
       - open_market_only=True for non-admins
     """
 
-    sort_by = (sort_by or "ai_best_desc").strip().lower()
+    side = (side or "both").strip().lower()
+    if side not in ("both", "buy", "sell"):
+        raise HTTPException(status_code=400, detail="invalid_side")
+
+    sort_by = (sort_by or "filing_date_desc").strip().lower()
     if sort_by not in ("ai_best_desc", "filing_date_desc"):
         raise HTTPException(status_code=400, detail="invalid_sort_by")
 
@@ -722,14 +1133,27 @@ def list_events(
     if ai_only:
         where.append("(e.ai_buy_rating IS NOT NULL OR e.ai_sell_rating IS NOT NULL OR e.ai_confidence IS NOT NULL)")
 
+    if side == "buy":
+        where.append("e.has_buy=1")
+    elif side == "sell":
+        where.append("e.has_sell=1")
+
     where_sql = " AND ".join(where)
+
+    # For sorting we historically treated "no AI rating" as -1.
+    # But that sentinel should not leak into the API payload; use NULL for display.
+    best_ai_expr = (
+        "CASE WHEN e.ai_buy_rating IS NULL AND e.ai_sell_rating IS NULL "
+        "THEN NULL "
+        "ELSE GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1)) END"
+    )
 
     if sort_by == "filing_date_desc":
         order_sql = "ORDER BY e.filing_date DESC, e.event_trade_date DESC"
     else:
         order_sql = """
         ORDER BY
-          GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1)) DESC,
+          COALESCE(best_ai_rating, -1) DESC,
           COALESCE(e.ai_confidence,-1) DESC,
           e.filing_date DESC
         """
@@ -739,7 +1163,7 @@ def list_events(
             f"""
             SELECT
               e.*,
-              GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1)) AS best_ai_rating,
+              {best_ai_expr} AS best_ai_rating,
               im.issuer_name AS issuer_name
             FROM insider_events e
             LEFT JOIN issuer_master im ON im.issuer_cik = e.issuer_cik
@@ -757,6 +1181,7 @@ def list_events(
 
         return {
             "days": days,
+            "side": side,
             "offset": offset,
             "limit": limit,
             "next_offset": next_offset,
@@ -871,6 +1296,18 @@ def get_event(
             d.pop("input_json", None)
 
             ai_latest = d
+
+        # Trade plan (technicals-only) for eligible BUY signals.
+        trade_plan = None
+        try:
+            trade_plan = compute_trade_plan_for_event(
+                conn,
+                cfg,
+                event,
+                ai_output=(ai_latest.get("output") if isinstance(ai_latest, dict) else None),
+            )
+        except Exception:
+            trade_plan = None
         return {
             "event": event,
             "rows": [dict(r) for r in rows_raw],
@@ -881,6 +1318,7 @@ def get_event(
                 "sell": dict(sell_cluster) if sell_cluster is not None else None,
             },
             "ai_latest": ai_latest,
+            "trade_plan": trade_plan,
         }
 
 

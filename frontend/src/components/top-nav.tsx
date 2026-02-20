@@ -23,10 +23,18 @@ function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
 
 export function TopNav() {
   const { user, logout } = useAuth();
+  const loc = useLocation();
+  const isApp = loc.pathname.startsWith("/app");
 
   return (
     <header className="sticky top-0 z-50 border-b border-zinc-200/70 bg-white/50 backdrop-blur-xl dark:border-zinc-800/50 dark:bg-black/40">
-      <div className="container mx-auto flex h-16 items-center justify-between px-4">
+      <div
+        className={
+          isApp
+            ? "mx-auto flex h-16 max-w-screen-2xl items-center justify-between px-4"
+            : "container mx-auto flex h-16 items-center justify-between px-4"
+        }
+      >
         <Link to="/" className="flex items-center gap-3">
           <div className="text-lg font-bold tracking-tight">
             <span className="bg-gradient-to-r from-purple-500 to-cyan-500 bg-clip-text text-transparent">
@@ -38,8 +46,7 @@ export function TopNav() {
 
         <nav className="hidden items-center gap-6 text-sm md:flex">
           <NavLink to="/pricing">Pricing</NavLink>
-          <NavLink to="/privacy">Privacy</NavLink>
-          <NavLink to="/terms">Terms</NavLink>
+          <NavLink to="/legal">Legal</NavLink>
         </nav>
 
         <div className="flex items-center gap-2">

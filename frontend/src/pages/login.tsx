@@ -101,9 +101,6 @@ export function LoginPage() {
                 Create an account
               </Link>
             </span>
-            <span className="hidden sm:inline">
-              Dev default: <span className="font-mono">admin/admin</span>
-            </span>
           </div>
         </form>
       </div>

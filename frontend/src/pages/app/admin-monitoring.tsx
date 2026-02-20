@@ -89,6 +89,7 @@ export function AdminMonitoringPage() {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [refreshKey, setRefreshKey] = React.useState(0);
+  const [selectedError, setSelectedError] = React.useState<RecentError | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -375,6 +376,7 @@ export function AdminMonitoringPage() {
                 <th className="px-3 py-2">when</th>
                 <th className="px-3 py-2">type</th>
                 <th className="px-3 py-2">dedupe</th>
+                <th className="px-3 py-2">error</th>
                 <th className="px-3 py-2 text-right">attempts</th>
               </tr>
             </thead>
@@ -384,12 +386,27 @@ export function AdminMonitoringPage() {
                   <td className="px-3 py-2 font-mono text-xs">{j.updated_at}</td>
                   <td className="px-3 py-2 font-mono text-xs">{j.job_type}</td>
                   <td className="px-3 py-2 font-mono text-xs">{j.dedupe_key}</td>
+                  <td className="px-3 py-2">
+                    {j.last_error ? (
+                      <button
+                        type="button"
+                        className="link text-left text-xs font-mono"
+                        onClick={() => setSelectedError(j)}
+                        title="View full error"
+                      >
+                        {String(j.last_error).slice(0, 120)}
+                        {String(j.last_error).length > 120 ? "…" : ""}
+                      </button>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-right font-mono text-xs">{j.attempts}</td>
                 </tr>
               ))}
               {!loading && (data?.recent_errors || []).length === 0 && (
                 <tr>
-                  <td className="px-3 py-3 muted" colSpan={4}>
+                  <td className="px-3 py-3 muted" colSpan={5}>
                     No recent errors.
                   </td>
                 </tr>
@@ -404,6 +421,29 @@ export function AdminMonitoringPage() {
           </div>
         )}
       </div>
+
+      {/* Error modal */}
+      {selectedError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-8" role="dialog" aria-modal>
+          <div className="glass-card w-full max-w-3xl p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-sm font-semibold">Error details</div>
+                <div className="mt-1 text-xs muted">
+                  job_id {selectedError.job_id} • {selectedError.job_type} • attempts {selectedError.attempts}
+                </div>
+              </div>
+              <button type="button" className="btn-secondary" onClick={() => setSelectedError(null)}>
+                Close
+              </button>
+            </div>
+
+            <pre className="mt-3 max-h-[60vh] overflow-auto rounded bg-black/5 p-3 text-xs leading-relaxed dark:bg-white/5">
+              {String(selectedError.last_error || "(no error text)")}
+            </pre>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -55,6 +55,7 @@ export type EventDetail = {
   stats: any[];
   clusters: { buy: any | null; sell: any | null };
   ai_latest: any | null;
+  trade_plan?: any | null;
 };
 
 export type PricePoint = { date: string; adj_close: number };

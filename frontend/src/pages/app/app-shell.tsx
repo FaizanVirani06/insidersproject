@@ -38,7 +38,6 @@ export function AppShell() {
       <aside className="glass-card p-4">
         <div className="mb-3 flex items-center justify-between">
           <div className="text-sm font-semibold">Dashboard</div>
-          <span className="badge">v1</span>
         </div>
 
         <nav className="space-y-1">
@@ -52,6 +51,9 @@ export function AppShell() {
               <div className="px-3 pb-1 text-xs font-semibold uppercase tracking-wide muted">Admin</div>
               <NavItem to="/app/admin/monitoring" label="Monitoring" />
               <NavItem to="/app/admin/jobs" label="Jobs" />
+              <NavItem to="/app/admin/feedback" label="Feedback" />
+              <NavItem to="/app/admin/support" label="Support" />
+              <NavItem to="/app/admin/settings" label="Settings" />
             </>
           )}
         </nav>

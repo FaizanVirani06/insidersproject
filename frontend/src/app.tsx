@@ -5,15 +5,17 @@ import { RequireAdmin, RequireAuth, RequireSubscription } from "@/components/rou
 import { RootLayout } from "@/pages/root-layout";
 import { HomePage } from "@/pages/home";
 import { PricingPage } from "@/pages/pricing";
-import { PrivacyPage } from "@/pages/privacy";
-import { TermsPage } from "@/pages/terms";
+import { LegalPage } from "@/pages/legal";
 import { LoginPage } from "@/pages/login";
 import { SignupPage } from "@/pages/signup";
 
 import { AppShell } from "@/pages/app/app-shell";
 import { AccountPage } from "@/pages/app/account";
 import { AdminJobsPage } from "@/pages/app/admin-jobs";
+import { AdminFeedbackPage } from "@/pages/app/admin-feedback";
 import { AdminMonitoringPage } from "@/pages/app/admin-monitoring";
+import { AdminSettingsPage } from "@/pages/app/admin-settings";
+import { AdminSupportPage } from "@/pages/app/admin-support";
 import { EventsPage } from "@/pages/app/events";
 import { EventDetailPage } from "@/pages/app/event-detail";
 import { FeedbackPage } from "@/pages/app/feedback";
@@ -24,7 +26,7 @@ function NotFound() {
   return (
     <div className="py-20 text-center">
       <div className="text-2xl font-semibold">404</div>
-      <div className="mt-2 text-sm text-black/60 dark:text-white/60">Page not found.</div>
+      <div className="mt-2 text-sm muted">Page not found.</div>
     </div>
   );
 }
@@ -35,8 +37,9 @@ export function App() {
       <Route element={<RootLayout />}>
         <Route index element={<HomePage />} />
         <Route path="pricing" element={<PricingPage />} />
-        <Route path="privacy" element={<PrivacyPage />} />
-        <Route path="terms" element={<TermsPage />} />
+        <Route path="legal" element={<LegalPage />} />
+        <Route path="privacy" element={<Navigate to="/legal" replace />} />
+        <Route path="terms" element={<Navigate to="/legal" replace />} />
         <Route path="login" element={<LoginPage />} />
         <Route path="signup" element={<SignupPage />} />
 
@@ -64,6 +67,9 @@ export function App() {
           <Route element={<RequireAdmin />}>
             <Route path="admin/monitoring" element={<AdminMonitoringPage />} />
             <Route path="admin/jobs" element={<AdminJobsPage />} />
+            <Route path="admin/feedback" element={<AdminFeedbackPage />} />
+            <Route path="admin/support" element={<AdminSupportPage />} />
+            <Route path="admin/settings" element={<AdminSettingsPage />} />
           </Route>
         </Route>
 

@@ -62,6 +62,33 @@ CREATE TABLE IF NOT EXISTS user_feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_user_created ON user_feedback (user_id, created_at);
 
+-- Support chat (in-app)
+-- A lightweight "ticket thread" model: one thread contains many messages.
+-- This enables a simple support widget for users and an admin inbox.
+CREATE TABLE IF NOT EXISTS support_threads (
+    thread_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_message_at TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_support_threads_user_status ON support_threads (user_id, status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_support_threads_status_updated ON support_threads (status, updated_at);
+
+CREATE TABLE IF NOT EXISTS support_messages (
+    message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id INTEGER NOT NULL,
+    sender_role TEXT NOT NULL CHECK (sender_role IN ('user','admin')),
+    sender_user_id INTEGER,
+    message TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (thread_id) REFERENCES support_threads(thread_id),
+    FOREIGN KEY (sender_user_id) REFERENCES users(user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_support_messages_thread_created ON support_messages (thread_id, created_at);
+
 -- Stripe webhook idempotency
 CREATE TABLE IF NOT EXISTS stripe_events (
     event_id TEXT PRIMARY KEY,

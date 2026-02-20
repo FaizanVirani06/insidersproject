@@ -18,7 +18,7 @@ export function HomePage() {
 
           <p className="mt-6 max-w-2xl text-lg muted">
             Track insider trades, cluster buys/sells, and generate concise AI summaries that help you triage what matters.
-            Built for speed, transparency, and operator-grade backfills.
+            Built for speed, transparency, and repeatable decision-making.
           </p>
 
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
@@ -34,7 +34,7 @@ export function HomePage() {
             <div className="glass-card p-4">
               <div className="text-sm font-semibold">Real-time discovery</div>
               <div className="mt-1 text-sm muted">
-                Poll the SEC feed, enqueue jobs, and process new filings continuously.
+                Monitor new SEC filings and surface insider trades quickly.
               </div>
             </div>
             <div className="glass-card p-4">
@@ -56,9 +56,9 @@ export function HomePage() {
       {/* Feature grid */}
       <section className="grid gap-6 md:grid-cols-3">
         <div className="glass-card p-6">
-          <div className="text-sm font-semibold">Built for backfills</div>
+          <div className="text-sm font-semibold">Outcomes & history</div>
           <p className="mt-2 text-sm muted">
-            Backfill issuer histories with resumable jobs and dedupe keys, so you can scale to thousands of tickers.
+            See historical outcomes after insider filings, with charts and horizons that help you validate signals.
           </p>
         </div>
 
@@ -70,9 +70,9 @@ export function HomePage() {
         </div>
 
         <div className="glass-card p-6">
-          <div className="text-sm font-semibold">Admin monitoring</div>
+          <div className="text-sm font-semibold">Trade plan</div>
           <p className="mt-2 text-sm muted">
-            Track job backlogs, throughput, latency, and errors so you know when to run more workers.
+            For eligible buy setups, get technical levels: stop loss, trim targets, and take-profit.
           </p>
         </div>
       </section>
