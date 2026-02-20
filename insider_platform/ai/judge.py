@@ -681,11 +681,10 @@ def _fetch_insider_history(
             "last_sell_filing_date": None,
         }
 
-    cutoff_5y = (cur_date - timedelta(days=365 * 5)).isoformat()
     cutoff_12m = (cur_date - timedelta(days=365)).isoformat()
 
     exclude_sql = ""
-    params: list[Any] = [issuer_cik, owner_key, cutoff_5y, cur_date.isoformat()]
+    params: list[Any] = [issuer_cik, owner_key, cur_date.isoformat()]
     if current_accession:
         exclude_sql = " AND accession_number <> ? "
         params.append(str(current_accession))
@@ -699,7 +698,6 @@ def _fetch_insider_history(
           SUM(CASE WHEN has_sell=1 AND filing_date>=? THEN 1 ELSE 0 END) AS prior_sell_events_12m
         FROM insider_events
         WHERE issuer_cik=? AND owner_key=?
-          AND filing_date>=?
           AND filing_date<?
           {exclude_sql}
         """,
@@ -832,7 +830,7 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
     def _pct_base(pct: Optional[float], *, is_buy: bool) -> float:
         # pct is already a percentage (e.g. 190.0 means +190%).
         if pct is None:
-            return 6.5 if is_buy else 6.0
+            return 5.6 if is_buy else 5.4
         if pct >= 200:
             return 9.5 if is_buy else 9.0
         if pct >= 100:
@@ -848,8 +846,8 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
         if pct >= 2:
             return 6.5
         if pct >= 1:
-            return 6.0
-        return 5.5
+            return 5.8
+        return 5.2
 
     def _trade_size_adj(dollars: Any, pct_mcap: Any) -> float:
         # Prefer % of market cap if we have it.
@@ -866,6 +864,10 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
                 return 0.4
             if pct_mcap_f >= 0.05:
                 return 0.2
+            if pct_mcap_f < 0.005:
+                return -0.4
+            if pct_mcap_f < 0.02:
+                return -0.2
             return 0.0
 
         try:
@@ -882,20 +884,23 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
             return 0.3
         if d >= 100_000:
             return 0.2
+        if d < 25_000:
+            return -0.2
         return 0.0
 
-    def _history_adj(prior_events_total: Any) -> float:
+    def _history_adj(prior_events_total: Any, trade_size_adj: float) -> float:
         try:
             n = int(prior_events_total) if prior_events_total is not None else 0
         except Exception:
             n = 0
         # Rarer events are more informative
         if n == 0:
-            return 0.5
+            # First-ever events are only informative when the trade itself is not tiny.
+            return 0.35 if trade_size_adj >= 0.2 else 0.1
         if n <= 2:
-            return 0.3
+            return 0.2
         if n <= 5:
-            return 0.15
+            return 0.1
         return 0.0
 
     def _cluster_adj(cluster_obj: Dict[str, Any]) -> float:
@@ -948,10 +953,11 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
             buy_pct_f = None
         buy_rating_f = _pct_base(buy_pct_f, is_buy=True)
         buy_reasons.append("pct_holdings_change")
-        buy_rating_f += _trade_size_adj(buy.get("dollars"), buy.get("trade_value_pct_market_cap"))
+        buy_trade_size_adj = _trade_size_adj(buy.get("dollars"), buy.get("trade_value_pct_market_cap"))
+        buy_rating_f += buy_trade_size_adj
         buy_rating_f += _bucket_adj(bucket)
         buy_rating_f += _role_adj(title)
-        buy_rating_f += _history_adj(insider_history.get("prior_buy_events_total"))
+        buy_rating_f += _history_adj(insider_history.get("prior_buy_events_total"), buy_trade_size_adj)
         buy_rating_f += _cluster_adj(cluster_context.get("buy_cluster") or {})
         buy_rating_f += _trend_adj(is_buy=True)
 
@@ -987,10 +993,11 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
         # Large % sells are more informative than small trims.
         sell_rating_f = _pct_base(sell_pct_f, is_buy=False)
         sell_reasons.append("pct_holdings_change")
-        sell_rating_f += _trade_size_adj(sell.get("dollars"), sell.get("trade_value_pct_market_cap"))
+        sell_trade_size_adj = _trade_size_adj(sell.get("dollars"), sell.get("trade_value_pct_market_cap"))
+        sell_rating_f += sell_trade_size_adj
         sell_rating_f += _bucket_adj(bucket)
         sell_rating_f += _role_adj(title)
-        sell_rating_f += _history_adj(insider_history.get("prior_sell_events_total"))
+        sell_rating_f += _history_adj(insider_history.get("prior_sell_events_total"), sell_trade_size_adj)
         sell_rating_f += _cluster_adj(cluster_context.get("sell_cluster") or {})
         sell_rating_f += _trend_adj(is_buy=False)
 

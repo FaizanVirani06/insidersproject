@@ -51,6 +51,8 @@ SCALE / SIGNIFICANCE (IMPORTANT):
 INSIDER HISTORY (IMPORTANT):
 - Use $.insider_history.prior_buy_events_total / prior_sell_events_total.
   First/second-ever buys/sells are more informative than routine activity.
+- Do NOT treat "first buy" as strong by itself when trade size is tiny:
+  require support from $.event.*.trade_value_pct_market_cap and/or meaningful dollar size.
 
 BENCHMARK NOTE:
 - insider_stats.*avg_return_* and win rates are computed on **excess returns** (trade_return - benchmark_return).

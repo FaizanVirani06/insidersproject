@@ -1843,9 +1843,12 @@ def admin_regenerate_ai(
                 "accession_number": acc,
                 "force": bool(payload.force),
             },
-            priority=70,
+            # Admin-triggered regenerate should jump to the front and overwrite
+            # any existing pending non-force job for the same event.
+            priority=1000,
             max_attempts=10,
             requeue_if_exists=True,
+            promote_if_pending=True,
         )
 
     return {
