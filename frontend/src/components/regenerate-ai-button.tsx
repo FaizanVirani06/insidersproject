@@ -41,7 +41,7 @@ export function RegenerateAIButton({
 
             if (res.ok) {
               setStatus(
-                "Regeneration job enqueued. Refresh this page in a moment to see the new AI output."
+                "Regeneration requested at top priority. Refresh shortly to see the updated AI output."
               );
             } else {
               const txt = await res.text().catch(() => "");

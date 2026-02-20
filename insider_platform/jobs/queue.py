@@ -38,6 +38,7 @@ def enqueue_job(
     max_attempts: int = 3,
     run_after: Optional[str] = None,
     requeue_if_exists: bool = False,
+    promote_if_pending: bool = False,
 ) -> None:
     """Enqueue a job with dedupe.
 
@@ -76,8 +77,30 @@ def enqueue_job(
         return
 
     status = str(row["status"])
-    if status in ("pending", "running"):
-        _debug(f"Skipped requeue (already {status}) {job_type} dedupe_key={dedupe_key}")
+    if status == "running":
+        _debug(f"Skipped requeue (already running) {job_type} dedupe_key={dedupe_key}")
+        return
+
+    if status == "pending":
+        if not promote_if_pending:
+            _debug(f"Skipped requeue (already pending) {job_type} dedupe_key={dedupe_key}")
+            return
+
+        conn.execute(
+            """
+            UPDATE jobs
+            SET priority=?,
+                payload_json=?,
+                attempts=0,
+                max_attempts=?,
+                last_error=NULL,
+                run_after=NULL,
+                updated_at=?
+            WHERE dedupe_key=? AND status='pending'
+            """,
+            (priority, payload_json, max_attempts, now, dedupe_key),
+        )
+        _debug(f"Promoted pending job {job_type} dedupe_key={dedupe_key}")
         return
 
     conn.execute(
