@@ -91,7 +91,9 @@ def enqueue_job(
             UPDATE jobs
             SET priority=?,
                 payload_json=?,
+                attempts=0,
                 max_attempts=?,
+                last_error=NULL,
                 run_after=NULL,
                 updated_at=?
             WHERE dedupe_key=? AND status='pending'

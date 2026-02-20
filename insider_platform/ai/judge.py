@@ -672,7 +672,8 @@ def _fetch_insider_history(
 
     if cur_date is None:
         return {
-            "window_years": 5,
+            "window_years": None,
+            "history_scope": "all_prior_before_current_filing",
             "prior_buy_events_total": None,
             "prior_sell_events_total": None,
             "prior_buy_events_12m": None,
@@ -727,7 +728,8 @@ def _fetch_insider_history(
     ).fetchone()
 
     return {
-        "window_years": 5,
+        "window_years": None,
+        "history_scope": "all_prior_before_current_filing",
         "prior_buy_events_total": (row["prior_buy_events_total"] if row is not None else None),
         "prior_sell_events_total": (row["prior_sell_events_total"] if row is not None else None),
         "prior_buy_events_12m": (row["prior_buy_events_12m"] if row is not None else None),
@@ -889,10 +891,13 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
         return 0.0
 
     def _history_adj(prior_events_total: Any, trade_size_adj: float) -> float:
+        if prior_events_total is None:
+            # Unknown history should be neutral, not treated like a verified first event.
+            return 0.0
         try:
-            n = int(prior_events_total) if prior_events_total is not None else 0
+            n = int(prior_events_total)
         except Exception:
-            n = 0
+            return 0.0
         # Rarer events are more informative
         if n == 0:
             # First-ever events are only informative when the trade itself is not tiny.
