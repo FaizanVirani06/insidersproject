@@ -503,7 +503,16 @@ def run_ai_for_event(conn: sqlite3.Connection, cfg: Config, event_key: EventKey,
 
     ai_output, parse_err = _try_parse_json(raw_text)
     if ai_output is None:
-        raise AIValidationError(parse_err or "Failed to parse JSON")
+        # One repair attempt even for parse failures: Gemini sometimes emits
+        # prose/near-JSON despite responseMimeType hints.
+        _debug(f"AI output parse failed; attempting repair: {parse_err}")
+        repaired_text = _repair_with_model(cfg, ai_input, raw_text, str(parse_err or "parse_failed"))
+        ai_output2, parse_err2 = _try_parse_json(repaired_text)
+        if ai_output2 is None:
+            raise AIValidationError(parse_err2 or parse_err or "Failed to parse JSON")
+        validate_ai_output(ai_output2, ai_input)
+        ai_output = ai_output2
+        raw_text = repaired_text
 
     try:
         validate_ai_output(ai_output, ai_input)
