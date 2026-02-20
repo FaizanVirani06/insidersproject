@@ -1034,9 +1034,9 @@ def ticker_events(
             order_sql = "ORDER BY e.filing_date DESC, e.event_trade_date DESC"
         else:
             # Sort missing ratings to the bottom, but keep the API value NULL.
-            order_sql = """
+            order_sql = f"""
             ORDER BY
-              COALESCE(best_ai_rating, -1) DESC,
+              COALESCE(({best_ai_expr}), -1) DESC,
               COALESCE(e.ai_confidence,-1) DESC,
               e.filing_date DESC
             """
@@ -1151,9 +1151,9 @@ def list_events(
     if sort_by == "filing_date_desc":
         order_sql = "ORDER BY e.filing_date DESC, e.event_trade_date DESC"
     else:
-        order_sql = """
+        order_sql = f"""
         ORDER BY
-          COALESCE(best_ai_rating, -1) DESC,
+          COALESCE(({best_ai_expr}), -1) DESC,
           COALESCE(e.ai_confidence,-1) DESC,
           e.filing_date DESC
         """
