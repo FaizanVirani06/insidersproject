@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -39,7 +38,7 @@ class IngestResult:
 
 
 def fetch_accession_document(
-    conn: sqlite3.Connection,
+    conn: Any,
     cfg: Config,
     accession_number: str,
     *,
@@ -141,7 +140,7 @@ def fetch_accession_document(
 
 
 def parse_accession_document(
-    conn: sqlite3.Connection,
+    conn: Any,
     cfg: Config,
     accession_number: str,
 ) -> IngestResult:
@@ -348,7 +347,7 @@ def parse_accession_document(
 
 
 def ingest_accession(
-    conn: sqlite3.Connection,
+    conn: Any,
     cfg: Config,
     accession_number: str,
     issuer_cik_hint: str | None = None,

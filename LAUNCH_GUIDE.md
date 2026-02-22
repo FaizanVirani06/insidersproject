@@ -151,13 +151,15 @@ If you want price charts:
 docker compose -f docker-compose.prod.yml up -d db
 ```
 
-### 6.2 Initialize database tables
+### 6.2 Initialize / migrate database tables (recommended)
 
 Run the schema init inside the API container:
 
 ```bash
 docker compose -f docker-compose.prod.yml run --rm api python scripts/init_db.py
 ```
+
+Note: the API and workers also apply schema/migrations automatically on startup. Running this command is still recommended on first deploy (and after schema changes) so you can see any migration errors immediately.
 
 ### 6.3 Start the full stack
 

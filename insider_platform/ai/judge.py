@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import sqlite3
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple, List
@@ -166,7 +165,7 @@ def _repair_with_model(cfg: Config, ai_input: Dict[str, Any], raw_text: str, err
     )
 
 
-def _fetch_filing_footnotes(conn: sqlite3.Connection, issuer_cik: str, accession_number: str) -> List[str]:
+def _fetch_filing_footnotes(conn: Any, issuer_cik: str, accession_number: str) -> List[str]:
     """Best-effort extraction of footnote text from persisted raw rows.
 
     Parser stores `footnotes` per transaction in raw_payload_json (when available).
@@ -213,7 +212,7 @@ def _fetch_filing_footnotes(conn: sqlite3.Connection, issuer_cik: str, accession
     return out
 
 
-def build_ai_input(conn: sqlite3.Connection, cfg: Config, event_key: EventKey) -> Dict[str, Any]:
+def build_ai_input(conn: Any, cfg: Config, event_key: EventKey) -> Dict[str, Any]:
     """Build ai_input_v2 JSON from persisted computed fields."""
     row = conn.execute(
         """
@@ -252,7 +251,7 @@ def build_ai_input(conn: sqlite3.Connection, cfg: Config, event_key: EventKey) -
     if ticker:
         frow = conn.execute(
             """
-            SELECT eodhd_symbol, market_cap, pe_ratio, eps, shares_outstanding, updated_at
+            SELECT eodhd_symbol, market_cap, pe_ratio, eps, shares_outstanding, sector, beta, updated_at
             FROM issuer_fundamentals_cache
             WHERE ticker=?
             """,
@@ -265,6 +264,8 @@ def build_ai_input(conn: sqlite3.Connection, cfg: Config, event_key: EventKey) -
                 "pe_ratio": frow["pe_ratio"],
                 "eps": frow["eps"],
                 "shares_outstanding": frow["shares_outstanding"],
+                "sector": frow.get("sector"),
+                "beta": frow.get("beta"),
                 "updated_at": frow["updated_at"],
             }
 
@@ -462,7 +463,7 @@ def build_ai_input(conn: sqlite3.Connection, cfg: Config, event_key: EventKey) -
     return ai_input
 
 
-def run_ai_for_event(conn: sqlite3.Connection, cfg: Config, event_key: EventKey, *, force: bool = False) -> None:
+def run_ai_for_event(conn: Any, cfg: Config, event_key: EventKey, *, force: bool = False) -> None:
     """Run Gemini judging for a single event and persist output."""
     if not cfg.GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not set")
@@ -594,7 +595,7 @@ def run_ai_for_event(conn: sqlite3.Connection, cfg: Config, event_key: EventKey,
     _debug(f"Stored AI output for {event_key}")
 
 
-def _fetch_cluster_context(conn: sqlite3.Connection, cluster_id: Any, flag: Any) -> Dict[str, Any]:
+def _fetch_cluster_context(conn: Any, cluster_id: Any, flag: Any) -> Dict[str, Any]:
     # cluster_flag may be null if not yet computed
     if flag is None:
         return {
@@ -641,7 +642,7 @@ def _fetch_cluster_context(conn: sqlite3.Connection, cluster_id: Any, flag: Any)
     }
 
 
-def _fetch_stats(conn: sqlite3.Connection, issuer_cik: str, owner_key: str, side: str) -> Dict[str, Any]:
+def _fetch_stats(conn: Any, issuer_cik: str, owner_key: str, side: str) -> Dict[str, Any]:
     row = conn.execute(
         "SELECT * FROM insider_issuer_stats WHERE issuer_cik=? AND owner_key=? AND side=?",
         (issuer_cik, owner_key, side),
@@ -668,7 +669,7 @@ def _fetch_stats(conn: sqlite3.Connection, issuer_cik: str, owner_key: str, side
 
 
 def _fetch_insider_history(
-    conn: sqlite3.Connection,
+    conn: Any,
     issuer_cik: str,
     owner_key: str,
     current_filing_date: Optional[str],
@@ -749,7 +750,7 @@ def _fetch_insider_history(
 
 
 def _fetch_issuer_recent_activity(
-    conn: sqlite3.Connection,
+    conn: Any,
     issuer_cik: str,
     current_filing_date: Optional[str],
     current_accession: Optional[str] = None,
@@ -817,6 +818,33 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
     insider_stats = ai_input.get("insider_stats") or {}
 
     bucket = issuer_context.get("market_cap_bucket")
+    fundamentals = issuer_context.get("fundamentals") or {}
+    beta = fundamentals.get("beta")
+
+    def _beta_conf_adj(beta_val: Any) -> float:
+        """Adjust confidence for volatility.
+
+        Beta is a rough market-sensitivity proxy; very high beta implies noisier price action.
+        We only apply small adjustments (this is an anchor, not the final model verdict).
+        """
+        try:
+            b = float(beta_val) if beta_val is not None else None
+        except Exception:
+            b = None
+        if b is None:
+            return 0.0
+        if b >= 2.0:
+            return -0.08
+        if b >= 1.5:
+            return -0.05
+        if b >= 1.2:
+            return -0.03
+        if b <= 0.6:
+            return 0.05
+        if b <= 0.8:
+            return 0.03
+        return 0.0
+
 
     def _bucket_adj(b: Any) -> float:
         b = (str(b).strip().lower() if b is not None else "")
@@ -990,6 +1018,7 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
             conf -= 0.07
         if data_quality.get("trend_missing"):
             conf -= 0.05
+        conf += _beta_conf_adj(beta)
         buy_conf = _clamp(conf, 0.0, 1.0)
 
     sell = event.get("sell") or {}
@@ -1029,6 +1058,7 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
             conf -= 0.07
         if data_quality.get("trend_missing"):
             conf -= 0.05
+        conf += _beta_conf_adj(beta)
         sell_conf = _clamp(conf, 0.0, 1.0)
 
     return {

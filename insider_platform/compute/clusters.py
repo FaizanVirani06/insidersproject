@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Dict, List, Tuple
@@ -25,7 +24,7 @@ class Candidate:
     pct_change: float | None
 
 
-def compute_clusters_for_ticker(conn: sqlite3.Connection, cfg: Config, ticker: str) -> None:
+def compute_clusters_for_ticker(conn: Any, cfg: Config, ticker: str) -> None:
     t = (ticker or "").strip()
     if not t:
         raise RuntimeError("Ticker blank for cluster computation")
@@ -42,7 +41,7 @@ def compute_clusters_for_ticker(conn: sqlite3.Connection, cfg: Config, ticker: s
     )
 
 
-def _compute_side_clusters(conn: sqlite3.Connection, cfg: Config, ticker: str, side: str) -> None:
+def _compute_side_clusters(conn: Any, cfg: Config, ticker: str, side: str) -> None:
     """Compute deterministic cluster flags for one side.
 
     Spec rule: **14 calendar day window**.
@@ -207,7 +206,7 @@ def _compute_side_clusters(conn: sqlite3.Connection, cfg: Config, ticker: str, s
 
         i += 1
 
-def _load_candidates(conn: sqlite3.Connection, ticker: str, side: str) -> List[Candidate]:
+def _load_candidates(conn: Any, ticker: str, side: str) -> List[Candidate]:
     if side == "buy":
         rows = conn.execute(
             """

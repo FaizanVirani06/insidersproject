@@ -1,24 +1,15 @@
-"""Database schema for the Insider Trading Analysis Platform.
-
-The original project started on SQLite. We now support Postgres as well.
-
-We intentionally keep timestamps as ISO-8601 TEXT (UTC, with 'Z') for portability and to
-avoid timezone surprises across engines. ISO strings sort lexicographically in time order,
-so comparisons like `run_after <= now_iso` behave correctly.
-
-NOTE: The Postgres schema is generated from the SQLite schema with a small set of
-transformations (types + autoincrement).
-"""
-
 from __future__ import annotations
 
-import re
+"""Database schema for Insider Platform.
 
+PostgreSQL is the only supported database engine.
+"""
 
-SCHEMA_SQLITE = r"""
-PRAGMA foreign_keys = ON;
+# NOTE:
+# - We store timestamps as ISO strings (UTC, ending with 'Z') for simplicity.
+# - This schema is intentionally light on constraints; application code enforces most invariants.
 
-CREATE TABLE IF NOT EXISTS app_config (
+SCHEMA_POSTGRES = r"""CREATE TABLE IF NOT EXISTS app_config (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
@@ -27,7 +18,7 @@ CREATE TABLE IF NOT EXISTS app_config (
 -- NOTE: This is intentionally simple (username/password + role).
 -- We use JWTs for stateless auth and store only password hashes.
 CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id BIGSERIAL PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('admin','user')),
@@ -51,7 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_users_subscription_status ON users (subscription_
 
 -- Feedback (customers)
 CREATE TABLE IF NOT EXISTS user_feedback (
-    feedback_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    feedback_id BIGSERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL,
     message TEXT NOT NULL,
     page_url TEXT,
@@ -66,7 +57,7 @@ CREATE INDEX IF NOT EXISTS idx_feedback_user_created ON user_feedback (user_id, 
 -- A lightweight "ticket thread" model: one thread contains many messages.
 -- This enables a simple support widget for users and an admin inbox.
 CREATE TABLE IF NOT EXISTS support_threads (
-    thread_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id BIGSERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')),
     created_at TEXT NOT NULL,
@@ -78,7 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_support_threads_user_status ON support_threads (u
 CREATE INDEX IF NOT EXISTS idx_support_threads_status_updated ON support_threads (status, updated_at);
 
 CREATE TABLE IF NOT EXISTS support_messages (
-    message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id BIGSERIAL PRIMARY KEY,
     thread_id INTEGER NOT NULL,
     sender_role TEXT NOT NULL CHECK (sender_role IN ('user','admin')),
     sender_user_id INTEGER,
@@ -128,7 +119,7 @@ CREATE TABLE IF NOT EXISTS filing_documents (
 CREATE INDEX IF NOT EXISTS idx_filing_documents_issuer ON filing_documents (issuer_cik);
 
 CREATE TABLE IF NOT EXISTS form4_rows_raw (
-    row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    row_id BIGSERIAL PRIMARY KEY,
     accession_number TEXT NOT NULL,
     issuer_cik TEXT NOT NULL,
     owner_key TEXT NOT NULL,
@@ -139,11 +130,11 @@ CREATE TABLE IF NOT EXISTS form4_rows_raw (
     is_derivative INTEGER NOT NULL,
     transaction_code TEXT,
     transaction_date TEXT,
-    shares_raw REAL,
-    shares_abs REAL,
+    shares_raw DOUBLE PRECISION,
+    shares_abs DOUBLE PRECISION,
     price_raw TEXT,
-    price REAL,
-    shares_owned_following REAL,
+    price DOUBLE PRECISION,
+    shares_owned_following DOUBLE PRECISION,
     parser_warnings_json TEXT,
     raw_payload_json TEXT NOT NULL
 );
@@ -171,28 +162,28 @@ CREATE TABLE IF NOT EXISTS insider_events (
     has_buy INTEGER NOT NULL DEFAULT 0,
     buy_trade_date TEXT,
     buy_last_tx_date TEXT,
-    buy_shares_total REAL,
-    buy_dollars_total REAL,
-    buy_vwap_price REAL,
-    buy_priced_shares_total REAL,
-    buy_unpriced_shares_total REAL,
+    buy_shares_total DOUBLE PRECISION,
+    buy_dollars_total DOUBLE PRECISION,
+    buy_vwap_price DOUBLE PRECISION,
+    buy_priced_shares_total DOUBLE PRECISION,
+    buy_unpriced_shares_total DOUBLE PRECISION,
     buy_vwap_is_partial INTEGER,
-    buy_shares_owned_following REAL,
-    buy_pct_holdings_change REAL,
+    buy_shares_owned_following DOUBLE PRECISION,
+    buy_pct_holdings_change DOUBLE PRECISION,
     buy_pct_change_missing_reason TEXT,
 
     -- Sell (S)
     has_sell INTEGER NOT NULL DEFAULT 0,
     sell_trade_date TEXT,
     sell_last_tx_date TEXT,
-    sell_shares_total REAL,
-    sell_dollars_total REAL,
-    sell_vwap_price REAL,
-    sell_priced_shares_total REAL,
-    sell_unpriced_shares_total REAL,
+    sell_shares_total DOUBLE PRECISION,
+    sell_dollars_total DOUBLE PRECISION,
+    sell_vwap_price DOUBLE PRECISION,
+    sell_priced_shares_total DOUBLE PRECISION,
+    sell_unpriced_shares_total DOUBLE PRECISION,
     sell_vwap_is_partial INTEGER,
-    sell_shares_owned_following REAL,
-    sell_pct_holdings_change REAL,
+    sell_shares_owned_following DOUBLE PRECISION,
+    sell_pct_holdings_change DOUBLE PRECISION,
     sell_pct_change_missing_reason TEXT,
 
     -- Summaries
@@ -201,11 +192,11 @@ CREATE TABLE IF NOT EXISTS insider_events (
 
     -- Trend context (event-level)
     trend_anchor_trading_date TEXT,
-    trend_close REAL,
-    trend_ret_20d REAL,
-    trend_ret_60d REAL,
-    trend_dist_52w_high REAL,
-    trend_dist_52w_low REAL,
+    trend_close DOUBLE PRECISION,
+    trend_ret_20d DOUBLE PRECISION,
+    trend_ret_60d DOUBLE PRECISION,
+    trend_dist_52w_high DOUBLE PRECISION,
+    trend_dist_52w_low DOUBLE PRECISION,
     trend_above_sma_50 INTEGER,
     trend_above_sma_200 INTEGER,
     trend_missing_reason TEXT,
@@ -222,9 +213,9 @@ CREATE TABLE IF NOT EXISTS insider_events (
     market_cap_updated_at TEXT,
 
     -- AI snapshot (denormalized)
-    ai_buy_rating REAL,
-    ai_sell_rating REAL,
-    ai_confidence REAL,
+    ai_buy_rating DOUBLE PRECISION,
+    ai_sell_rating DOUBLE PRECISION,
+    ai_confidence DOUBLE PRECISION,
     ai_model_id TEXT,
     ai_prompt_version TEXT,
     ai_generated_at TEXT,
@@ -254,26 +245,26 @@ CREATE TABLE IF NOT EXISTS event_outcomes (
 
     trade_date TEXT,
     anchor_trading_date TEXT,
-    p0 REAL,
+    p0 DOUBLE PRECISION,
 
     future_date_60d TEXT,
-    future_price_60d REAL,
-    return_60d REAL,
+    future_price_60d DOUBLE PRECISION,
+    return_60d DOUBLE PRECISION,
     missing_reason_60d TEXT,
 
     bench_symbol TEXT,
-    bench_return_60d REAL,
+    bench_return_60d DOUBLE PRECISION,
     bench_missing_reason_60d TEXT,
-    excess_return_60d REAL,
+    excess_return_60d DOUBLE PRECISION,
 
     future_date_180d TEXT,
-    future_price_180d REAL,
-    return_180d REAL,
+    future_price_180d DOUBLE PRECISION,
+    return_180d DOUBLE PRECISION,
     missing_reason_180d TEXT,
 
-    bench_return_180d REAL,
+    bench_return_180d DOUBLE PRECISION,
     bench_missing_reason_180d TEXT,
-    excess_return_180d REAL,
+    excess_return_180d DOUBLE PRECISION,
 
     outcomes_version TEXT NOT NULL,
     computed_at TEXT NOT NULL,
@@ -285,7 +276,7 @@ CREATE INDEX IF NOT EXISTS idx_outcomes_issuer_owner_side ON event_outcomes (iss
 CREATE TABLE IF NOT EXISTS issuer_prices_daily (
     issuer_cik TEXT NOT NULL,
     date TEXT NOT NULL,
-    adj_close REAL NOT NULL,
+    adj_close DOUBLE PRECISION NOT NULL,
     source_ticker TEXT,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (issuer_cik, date)
@@ -294,7 +285,7 @@ CREATE INDEX IF NOT EXISTS idx_prices_issuer_date ON issuer_prices_daily (issuer
 CREATE TABLE IF NOT EXISTS benchmark_prices_daily (
     symbol TEXT NOT NULL,
     date TEXT NOT NULL,
-    adj_close REAL NOT NULL,
+    adj_close DOUBLE PRECISION NOT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (symbol, date)
 );
@@ -309,9 +300,9 @@ CREATE TABLE IF NOT EXISTS clusters (
     window_start_date TEXT NOT NULL,
     window_end_date TEXT NOT NULL,
     unique_insiders INTEGER NOT NULL,
-    total_dollars REAL NOT NULL,
+    total_dollars DOUBLE PRECISION NOT NULL,
     execs_involved INTEGER NOT NULL,
-    max_pct_holdings_change REAL,
+    max_pct_holdings_change DOUBLE PRECISION,
     cluster_version TEXT NOT NULL,
     computed_at TEXT NOT NULL
 );
@@ -324,8 +315,8 @@ CREATE TABLE IF NOT EXISTS cluster_members (
     accession_number TEXT NOT NULL,
     side TEXT NOT NULL CHECK (side IN ('buy','sell')),
     trade_date TEXT NOT NULL,
-    dollars_contributed REAL,
-    pct_holdings_change REAL,
+    dollars_contributed DOUBLE PRECISION,
+    pct_holdings_change DOUBLE PRECISION,
     PRIMARY KEY (cluster_id, issuer_cik, owner_key, accession_number, side)
 );
 CREATE INDEX IF NOT EXISTS idx_cluster_members_event ON cluster_members (issuer_cik, owner_key, accession_number, side);
@@ -336,12 +327,12 @@ CREATE TABLE IF NOT EXISTS insider_issuer_stats (
     side TEXT NOT NULL CHECK (side IN ('buy','sell')),
 
     eligible_n_60d INTEGER NOT NULL,
-    win_rate_60d REAL,
-    avg_return_60d REAL,
+    win_rate_60d DOUBLE PRECISION,
+    avg_return_60d DOUBLE PRECISION,
 
     eligible_n_180d INTEGER NOT NULL,
-    win_rate_180d REAL,
-    avg_return_180d REAL,
+    win_rate_180d DOUBLE PRECISION,
+    avg_return_180d DOUBLE PRECISION,
 
     stats_version TEXT NOT NULL,
     computed_at TEXT NOT NULL,
@@ -359,7 +350,7 @@ CREATE TABLE IF NOT EXISTS market_cap_cache (
 );
 
 CREATE TABLE IF NOT EXISTS ai_outputs (
-    ai_output_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ai_output_id BIGSERIAL PRIMARY KEY,
     issuer_cik TEXT NOT NULL,
     owner_key TEXT NOT NULL,
     accession_number TEXT NOT NULL,
@@ -370,9 +361,9 @@ CREATE TABLE IF NOT EXISTS ai_outputs (
     output_schema_version TEXT NOT NULL,
     inputs_hash TEXT NOT NULL,
 
-    buy_rating REAL,
-    sell_rating REAL,
-    confidence REAL,
+    buy_rating DOUBLE PRECISION,
+    sell_rating DOUBLE PRECISION,
+    confidence DOUBLE PRECISION,
 
     input_json TEXT NOT NULL,
     output_json TEXT NOT NULL,
@@ -396,7 +387,7 @@ CREATE TABLE IF NOT EXISTS backfill_queue (
 CREATE INDEX IF NOT EXISTS idx_backfill_status ON backfill_queue (status, issuer_cik, filing_date);
 
 CREATE TABLE IF NOT EXISTS jobs (
-    job_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id BIGSERIAL PRIMARY KEY,
     job_type TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('pending','running','success','error')),
     priority INTEGER NOT NULL DEFAULT 100,
@@ -413,7 +404,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status_priority ON jobs (status, priority, c
 CREATE INDEX IF NOT EXISTS idx_jobs_run_after ON jobs (run_after);
 
 CREATE TABLE IF NOT EXISTS data_issues (
-    issue_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_id BIGSERIAL PRIMARY KEY,
     issue_type TEXT NOT NULL,
     severity TEXT NOT NULL CHECK (severity IN ('low','medium','high')),
     issuer_cik TEXT,
@@ -429,9 +420,11 @@ CREATE TABLE IF NOT EXISTS issuer_fundamentals_cache (
     ticker TEXT PRIMARY KEY,
     eodhd_symbol TEXT,
     market_cap BIGINT,
-    pe_ratio REAL,
-    eps REAL,
-    shares_outstanding REAL,
+    pe_ratio DOUBLE PRECISION,
+    eps DOUBLE PRECISION,
+    shares_outstanding DOUBLE PRECISION,
+    sector TEXT,
+    beta DOUBLE PRECISION,
     fundamentals_json TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -444,45 +437,15 @@ CREATE TABLE IF NOT EXISTS issuer_news (
     title TEXT,
     source TEXT,
     url TEXT NOT NULL,
-    sentiment REAL,
+    sentiment DOUBLE PRECISION,
     summary TEXT,
     news_json TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
     PRIMARY KEY (ticker, url)
 );
-CREATE INDEX IF NOT EXISTS idx_news_ticker_published ON issuer_news (ticker, published_at);
-"""
+CREATE INDEX IF NOT EXISTS idx_news_ticker_published ON issuer_news (ticker, published_at);"""
 
 
-def _sqlite_to_postgres(ddl: str) -> str:
-    # Remove SQLite pragmas
-    lines: list[str] = []
-    for line in ddl.splitlines():
-        if line.strip().upper().startswith("PRAGMA "):
-            continue
-        lines.append(line)
-    out = "\n".join(lines)
-
-    # Types
-    out = re.sub(r"\bREAL\b", "DOUBLE PRECISION", out)
-
-    # AUTOINCREMENT primary keys
-    out = re.sub(
-        r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT",
-        "BIGSERIAL PRIMARY KEY",
-        out,
-        flags=re.IGNORECASE,
-    )
-    out = re.sub(r"\bAUTOINCREMENT\b", "", out, flags=re.IGNORECASE)
-
-    return out
-
-
-SCHEMA_POSTGRES = _sqlite_to_postgres(SCHEMA_SQLITE)
-
-
-def get_schema_sql(dialect: str) -> str:
-    d = (dialect or "").lower()
-    if d.startswith("post"):
-        return SCHEMA_POSTGRES
-    return SCHEMA_SQLITE
+def get_schema_sql() -> str:
+    """Return the PostgreSQL schema DDL."""
+    return SCHEMA_POSTGRES

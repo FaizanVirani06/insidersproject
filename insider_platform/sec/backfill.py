@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 import time
 import threading
 from datetime import datetime
@@ -63,7 +62,7 @@ def _is_form4(form: str | None) -> bool:
 
 
 def discover_form4_accessions_for_issuer(
-    conn: sqlite3.Connection,
+    conn: Any,
     cfg: Config,
     *,
     issuer_cik: str,

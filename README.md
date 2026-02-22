@@ -2,7 +2,7 @@
 
 A full-stack insider trading analysis dashboard.
 
-- **Backend:** FastAPI + Postgres (recommended) or SQLite (dev)
+- **Backend:** FastAPI + Postgres
 - **Frontend:** Vite + React + React Router (static SPA)
 - **Payments:** Stripe subscriptions (Checkout + Customer Portal + Webhooks)
 - **Workers:** background ingestion + compute jobs
@@ -28,11 +28,13 @@ cp .env.example .env
 docker compose up -d db
 ```
 
-3) Initialize the database schema:
+3) Initialize / migrate the database schema (recommended):
 
 ```bash
 python scripts/init_db.py
 ```
+
+Note: the API and workers will also run migrations automatically on startup, so this is mainly useful to migrate ahead of time.
 
 4) Start the API:
 
@@ -59,6 +61,21 @@ Open the app at:
 
 - Frontend: `http://localhost:5173`
 - API: `http://localhost:8000`
+
+
+## Backfill fundamentals (sector/beta)
+
+If you add new fundamentals fields (like `sector` / `beta`) and want to populate them for existing tickers, you can enqueue market-cap/fundamentals jobs:
+
+```bash
+python scripts/enqueue_market_cap.py --all
+```
+
+Run with `--force` to refresh all tickers:
+
+```bash
+python scripts/enqueue_market_cap.py --all --force
+```
 
 ## Production (Docker + Caddy)
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timezone, timedelta
 
 from insider_platform.config import Config
@@ -12,7 +11,7 @@ def _debug(msg: str) -> None:
     print(f"[prices] {msg}")
 
 
-def fetch_and_store_prices_for_issuer(conn: sqlite3.Connection, cfg: Config, issuer_cik: str) -> None:
+def fetch_and_store_prices_for_issuer(conn: Any, cfg: Config, issuer_cik: str) -> None:
     if not cfg.EODHD_API_KEY:
         raise RuntimeError("EODHD_API_KEY is not set")
 
@@ -64,7 +63,7 @@ def fetch_and_store_prices_for_issuer(conn: sqlite3.Connection, cfg: Config, iss
     _debug(f"Upserted {n} price rows for issuer_cik={issuer_cik}")
 
 
-def fetch_and_store_benchmark_prices(conn: sqlite3.Connection, cfg: Config, symbol: str | None = None) -> str:
+def fetch_and_store_benchmark_prices(conn: Any, cfg: Config, symbol: str | None = None) -> str:
     """Fetch and store benchmark daily adjusted close series.
 
     Used for excess-return calculations (insider performance vs S&P500 proxy).

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 from statistics import mean
 from typing import List, Tuple, Optional
 
@@ -12,7 +11,7 @@ def _debug(msg: str) -> None:
     print(f"[trend] {msg}")
 
 
-def compute_trend_for_event(conn: sqlite3.Connection, event_key: EventKey) -> None:
+def compute_trend_for_event(conn: Any, event_key: EventKey) -> None:
     """Compute trend context for an event using adjusted close prices.
 
     Anchor trading day: first trading day on/after event_trade_date.
@@ -115,7 +114,7 @@ def compute_trend_for_event(conn: sqlite3.Connection, event_key: EventKey) -> No
     _debug(f"Trend computed for {event_key}: anchor={anchor_date} ret_20={ret_20:.3f} ret_60={ret_60:.3f}")
 
 
-def _load_prices(conn: sqlite3.Connection, issuer_cik: str) -> List[Tuple[str, float]]:
+def _load_prices(conn: Any, issuer_cik: str) -> List[Tuple[str, float]]:
     rows = conn.execute(
         "SELECT date, adj_close FROM issuer_prices_daily WHERE issuer_cik=? ORDER BY date ASC",
         (issuer_cik,),
@@ -123,7 +122,7 @@ def _load_prices(conn: sqlite3.Connection, issuer_cik: str) -> List[Tuple[str, f
     return [(r["date"], float(r["adj_close"])) for r in rows]
 
 
-def _set_trend_missing(conn: sqlite3.Connection, event_key: EventKey, reason: str) -> None:
+def _set_trend_missing(conn: Any, event_key: EventKey, reason: str) -> None:
     now = utcnow_iso()
     conn.execute(
         """

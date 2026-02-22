@@ -14,7 +14,6 @@ Important constraints / notes:
 """
 
 import math
-import sqlite3
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -96,7 +95,7 @@ def _extract_buy_signal_strength(
 
 
 def _fetch_entry_price(
-    conn: sqlite3.Connection,
+    conn: Any,
     issuer_cik: str,
     target_date: str,
 ) -> Optional[Dict[str, Any]]:
@@ -121,7 +120,7 @@ def _fetch_entry_price(
 
 
 def _fetch_lookback_closes(
-    conn: sqlite3.Connection,
+    conn: Any,
     issuer_cik: str,
     end_date: str,
     limit: int = 400,
@@ -147,7 +146,7 @@ def _fetch_lookback_closes(
 
 
 def compute_trade_plan_for_event(
-    conn: sqlite3.Connection,
+    conn: Any,
     cfg: Config,
     event: Dict[str, Any],
     *,

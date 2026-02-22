@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Set
@@ -123,7 +122,7 @@ def run_worker_forever(
                     # For backfill jobs, persist error on the backfill row so progress is visible.
                     _maybe_mark_backfill_error(conn, job.job_type, job.payload, str(e))
                     try:
-                        conn.execute("ROLLBACK")  # works with our DB wrapper across dialects
+                        conn.execute("ROLLBACK")  # undo partial work before recording error
                     except Exception:
                         pass
                     mark_job_error(conn, job.job_id, str(e), retry_after_seconds=60)
@@ -135,7 +134,7 @@ def _iso_after_seconds(seconds: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
 
 
-def _maybe_mark_backfill_error(conn: sqlite3.Connection, job_type: str, payload: Dict[str, Any], err: str) -> None:
+def _maybe_mark_backfill_error(conn: Any, job_type: str, payload: Dict[str, Any], err: str) -> None:
     try:
         if job_type in ("FETCH_ACCESSION_DOCS", "INGEST_ACCESSION"):
             issuer_cik = str(payload.get("issuer_cik_hint") or payload.get("issuer_cik") or "").strip()
@@ -171,7 +170,7 @@ def _maybe_mark_backfill_error(conn: sqlite3.Connection, job_type: str, payload:
         return
 
 
-def _run_job(conn: sqlite3.Connection, cfg: Config, job_type: str, payload: Dict[str, Any]) -> None:
+def _run_job(conn: Any, cfg: Config, job_type: str, payload: Dict[str, Any]) -> None:
     # -------------------------------------------------------------------------
     # INGESTION: split into fetch (API-bound) + parse (compute-bound)
     # -------------------------------------------------------------------------
@@ -548,7 +547,7 @@ def _run_job(conn: sqlite3.Connection, cfg: Config, job_type: str, payload: Dict
     raise RuntimeError(f"Unknown job_type: {job_type}")
 
 
-def _requeue_missing_price_dependent_jobs(conn: sqlite3.Connection, cfg: Config, issuer_cik: str) -> None:
+def _requeue_missing_price_dependent_jobs(conn: Any, cfg: Config, issuer_cik: str) -> None:
     # Trend jobs
     trend_rows = conn.execute(
         """
@@ -594,7 +593,7 @@ def _requeue_missing_price_dependent_jobs(conn: sqlite3.Connection, cfg: Config,
         )
 
 
-def _requeue_missing_benchmark_outcomes(conn: sqlite3.Connection, cfg: Config) -> None:
+def _requeue_missing_benchmark_outcomes(conn: Any, cfg: Config) -> None:
     rows = conn.execute(
         """
         SELECT DISTINCT issuer_cik, owner_key, accession_number
@@ -619,7 +618,7 @@ def _requeue_missing_benchmark_outcomes(conn: sqlite3.Connection, cfg: Config) -
         )
 
 
-def _enqueue_reparse_ticker(conn: sqlite3.Connection, cfg: Config, ticker: str) -> None:
+def _enqueue_reparse_ticker(conn: Any, cfg: Config, ticker: str) -> None:
     """Reparse a ticker's historical accessions (used when parse_version is stale)."""
     rows = conn.execute(
         "SELECT DISTINCT accession_number FROM insider_events WHERE ticker=?",

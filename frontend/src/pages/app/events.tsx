@@ -50,7 +50,7 @@ const LOOKBACK_OPTIONS: { label: string; value: number }[] = [
 export function EventsPage() {
   const [days, setDays] = React.useState<number>(30);
   const [side, setSide] = React.useState<"both" | "buy" | "sell">("both");
-  const [sortBy, setSortBy] = React.useState<"filing_date_desc" | "ai_best_desc">("filing_date_desc");
+  const [sortBy, setSortBy] = React.useState<"filing_date_desc" | "ai_best_desc" | "sector_asc">("filing_date_desc");
 
   const [loading, setLoading] = React.useState<boolean>(true);
   const [error, setError] = React.useState<string | null>(null);
@@ -93,7 +93,11 @@ export function EventsPage() {
         <div>
           <h1 className="text-2xl font-semibold">Events</h1>
           <p className="text-sm muted">
-            {sortBy === "filing_date_desc" ? "Sorted by most recent filings." : "Sorted by best AI rating."}
+            {sortBy === "filing_date_desc"
+              ? "Sorted by most recent filings."
+              : sortBy === "ai_best_desc"
+                ? "Sorted by best AI rating."
+                : "Sorted by sector (A–Z)."}
           </p>
         </div>
 
@@ -123,6 +127,7 @@ export function EventsPage() {
           >
             <option value="filing_date_desc">Most recent</option>
             <option value="ai_best_desc">Best AI</option>
+            <option value="sector_asc">Sector (A–Z)</option>
           </select>
 
           <label className="text-sm muted" htmlFor="lookback">
@@ -163,6 +168,7 @@ export function EventsPage() {
                 <th className="p-2">Best</th>
                 <th className="p-2">Action</th>
                 <th className="p-2">Ticker</th>
+                <th className="p-2">Sector</th>
                 <th className="p-2">Insider</th>
                 <th className="p-2">Filed</th>
                 <th className="p-2">Trade date</th>
@@ -196,6 +202,7 @@ export function EventsPage() {
                         "—"
                       )}
                     </td>
+                    <td className="p-2">{(e as any).sector ?? "—"}</td>
                     <td className="p-2">{(e as any).owner_name_display ?? (e as any).owner_key ?? "—"}</td>
                     <td className="p-2">{fmtDate((e as any).filing_date)}</td>
                     <td className="p-2">{fmtDate((e as any).event_trade_date)}</td>
@@ -215,7 +222,7 @@ export function EventsPage() {
 
               {!loading && (data?.events?.length ?? 0) === 0 && (
                 <tr>
-                  <td className="p-4 muted" colSpan={9}>
+                  <td className="p-4 muted" colSpan={10}>
                     No events found for the selected filters.
                   </td>
                 </tr>

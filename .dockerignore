@@ -6,7 +6,6 @@ __pycache__
 *.pyd
 
 # Local DBs / logs
-*.sqlite
 *.db
 *.log
 

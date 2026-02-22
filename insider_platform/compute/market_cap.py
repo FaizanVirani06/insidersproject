@@ -90,6 +90,9 @@ def fetch_and_store_market_cap(conn: Any, cfg: Config, ticker: str) -> None:
     highlights = payload.get("Highlights") or {}
     shares_stats = payload.get("SharesStats") or {}
 
+    general = payload.get("General") or {}
+    technicals = payload.get("Technicals") or {}
+
     market_cap = _to_int(highlights.get("MarketCapitalization") or highlights.get("MarketCapitalizationUSD") or highlights.get("MarketCapitalizationUsd"))
     pe_ratio = _to_float(highlights.get("PERatio") or highlights.get("PeRatio") or highlights.get("peRatio"))
     eps = _to_float(highlights.get("EarningsShare") or highlights.get("EPS") or highlights.get("Eps") or highlights.get("eps"))
@@ -99,6 +102,9 @@ def fetch_and_store_market_cap(conn: Any, cfg: Config, ticker: str) -> None:
         or payload.get("SharesOutstanding")
     )
 
+    sector = (general.get("Sector") or general.get("sector"))
+    beta = _to_float(technicals.get("Beta") or technicals.get("beta"))
+
     now = utcnow_iso()
     bucket = _bucket_market_cap(market_cap)
 
@@ -106,18 +112,20 @@ def fetch_and_store_market_cap(conn: Any, cfg: Config, ticker: str) -> None:
     conn.execute(
         """
         INSERT INTO issuer_fundamentals_cache
-            (ticker, eodhd_symbol, market_cap, pe_ratio, eps, shares_outstanding, fundamentals_json, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (ticker, eodhd_symbol, market_cap, pe_ratio, eps, shares_outstanding, sector, beta, fundamentals_json, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(ticker) DO UPDATE SET
             eodhd_symbol=excluded.eodhd_symbol,
             market_cap=excluded.market_cap,
             pe_ratio=excluded.pe_ratio,
             eps=excluded.eps,
             shares_outstanding=excluded.shares_outstanding,
+            sector=excluded.sector,
+            beta=excluded.beta,
             fundamentals_json=excluded.fundamentals_json,
             updated_at=excluded.updated_at
         """,
-        (t, symbol, market_cap, pe_ratio, eps, shares_outstanding, json.dumps(payload), now),
+        (t, symbol, market_cap, pe_ratio, eps, shares_outstanding, sector, beta, json.dumps(payload), now),
     )
 
     # Keep the existing market_cap_cache table in sync (for any legacy code paths)
@@ -140,11 +148,10 @@ def fetch_and_store_market_cap(conn: Any, cfg: Config, ticker: str) -> None:
         UPDATE insider_events
         SET market_cap=?,
             market_cap_bucket=?,
-            market_cap_source='eodhd',
             market_cap_updated_at=?
         WHERE ticker=?
         """,
         (market_cap, bucket, now, t),
     )
 
-    _debug(f"Updated market cap ticker={t} symbol={symbol} mcap={market_cap} bucket={bucket} pe={pe_ratio} shares_out={shares_outstanding}")
+    _debug(f"Updated fundamentals ticker={t} symbol={symbol} mcap={market_cap} bucket={bucket} sector={sector} beta={beta} pe={pe_ratio} shares_out={shares_outstanding}")

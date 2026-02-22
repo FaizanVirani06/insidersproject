@@ -92,7 +92,7 @@ def main() -> None:
                 """,
                 (rec.cik10, rec.ticker, now, rec.title),
             )
-            # sqlite3 rowcount is 1 for insert and update; best-effort counts:
+            # DB driver rowcount can vary (insert vs update); best-effort counts:
             if cur.lastrowid:
                 inserted += 1
             else:

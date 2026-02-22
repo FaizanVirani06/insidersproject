@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 from statistics import mean
 
 from insider_platform.config import Config
@@ -12,7 +11,7 @@ def _debug(msg: str) -> None:
     print(f"[stats] {msg}")
 
 
-def compute_stats_for_owner_issuer(conn: sqlite3.Connection, cfg: Config, key: OwnerIssuerKey) -> None:
+def compute_stats_for_owner_issuer(conn: Any, cfg: Config, key: OwnerIssuerKey) -> None:
     """Recompute issuer-specific insider performance stats from event_outcomes.
 
     stats_v2: averages are computed on **excess returns** (trade_return - benchmark_return),

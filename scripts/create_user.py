@@ -1,4 +1,4 @@
-"""Create a user in the SQLite DB.
+"""Create a user in the database (PostgreSQL).
 
 Usage:
   python scripts/create_user.py --username alice --password '...' --role user

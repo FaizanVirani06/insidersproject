@@ -20,6 +20,8 @@ export type TickerRow = {
   market_cap?: number | null;
   market_cap_bucket?: string | null;
   market_cap_updated_at?: string | null;
+  sector?: string | null;
+  beta?: number | null;
 };
 
 export type InsiderEventRow = Record<string, any> & {
@@ -46,6 +48,8 @@ export type InsiderEventRow = Record<string, any> & {
   cluster_flag_sell?: number | null;
   market_cap?: number | null;
   market_cap_bucket?: string | null;
+  sector?: string | null;
+  beta?: number | null;
 };
 
 export type EventDetail = {

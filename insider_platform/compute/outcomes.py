@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 from typing import Any, List, Tuple, Optional
 
 from insider_platform.config import Config
@@ -14,7 +13,7 @@ def _debug(msg: str) -> None:
     print(f"[outcomes] {msg}")
 
 
-def compute_outcomes_for_event(conn: sqlite3.Connection, cfg: Config, event_key: EventKey) -> None:
+def compute_outcomes_for_event(conn: Any, cfg: Config, event_key: EventKey) -> None:
     """Compute +60/+180 trading-day forward returns for buy and sell sides.
 
     outcomes_v2 adds a benchmark series (default: SPY.US) so we can compute:
@@ -125,7 +124,7 @@ def compute_outcomes_for_event(conn: sqlite3.Connection, cfg: Config, event_key:
     _touch_event(conn, event_key)
 
 
-def _load_prices(conn: sqlite3.Connection, issuer_cik: str) -> List[Tuple[str, float]]:
+def _load_prices(conn: Any, issuer_cik: str) -> List[Tuple[str, float]]:
     rows = conn.execute(
         "SELECT date, adj_close FROM issuer_prices_daily WHERE issuer_cik=? ORDER BY date ASC",
         (issuer_cik,),
@@ -133,7 +132,7 @@ def _load_prices(conn: sqlite3.Connection, issuer_cik: str) -> List[Tuple[str, f
     return [(str(r["date"]), float(r["adj_close"])) for r in rows]
 
 
-def _load_benchmark_prices(conn: sqlite3.Connection, symbol: str) -> List[Tuple[str, float]]:
+def _load_benchmark_prices(conn: Any, symbol: str) -> List[Tuple[str, float]]:
     rows = conn.execute(
         "SELECT date, adj_close FROM benchmark_prices_daily WHERE symbol=? ORDER BY date ASC",
         (symbol,),
@@ -159,7 +158,7 @@ def _bench_return(b0: float, bf: float, side: str) -> float:
 
 
 def _compute_side(
-    conn: sqlite3.Connection,
+    conn: Any,
     cfg: Config,
     event_key: EventKey,
     side: str,
@@ -367,7 +366,7 @@ def _compute_side(
 
 
 def _upsert_missing(
-    conn: sqlite3.Connection,
+    conn: Any,
     cfg: Config,
     event_key: EventKey,
     side: str,
@@ -444,14 +443,14 @@ def _upsert_missing(
     _debug(f"Outcomes missing for {event_key} side={side}: {reason}")
 
 
-def _delete_outcomes(conn: sqlite3.Connection, event_key: EventKey, side: str) -> None:
+def _delete_outcomes(conn: Any, event_key: EventKey, side: str) -> None:
     conn.execute(
         "DELETE FROM event_outcomes WHERE issuer_cik=? AND owner_key=? AND accession_number=? AND side=?",
         (event_key.issuer_cik, event_key.owner_key, event_key.accession_number, side),
     )
 
 
-def _touch_event(conn: sqlite3.Connection, event_key: EventKey) -> None:
+def _touch_event(conn: Any, event_key: EventKey) -> None:
     conn.execute(
         """
         UPDATE insider_events

@@ -45,16 +45,14 @@ class Config:
     # -----------------
     # Core
     # -----------------
-    # Preferred: set INSIDER_DATABASE_URL (or DATABASE_URL) to use Postgres.
-    # Fallback: INSIDER_DB_PATH for SQLite.
+    # Database (PostgreSQL)
+    # Preferred: set INSIDER_DATABASE_URL (or DATABASE_URL).
+    # Default is a local dev Postgres matching docker-compose.yml.
     DB_DSN: str = (
         os.environ.get("INSIDER_DATABASE_URL")
         or os.environ.get("DATABASE_URL")
-        or os.environ.get("INSIDER_DB_PATH", "./insider_platform.sqlite")
+        or "postgresql://postgres:postgres@localhost:5432/insider_platform"
     )
-
-    # Backward-compatible alias (SQLite path). When DB_DSN is a Postgres URL, this is unused.
-    DB_PATH: str = os.environ.get("INSIDER_DB_PATH", "./insider_platform.sqlite")
 
     # SEC (EDGAR requires a descriptive User-Agent)
     SEC_USER_AGENT: str = os.environ.get(

@@ -12,6 +12,9 @@ export function TickersPage() {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [query, setQuery] = React.useState("");
+  const [sortBy, setSortBy] = React.useState<"last_filing_desc" | "ticker_asc" | "sector_asc">(
+    "last_filing_desc"
+  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -38,13 +41,39 @@ export function TickersPage() {
 
   const filtered = React.useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return tickers;
-    return tickers.filter((t) => {
-      const a = (t.current_ticker || "").toLowerCase();
-      const b = (t.issuer_name || "").toLowerCase();
-      return a.includes(q) || b.includes(q);
-    });
-  }, [tickers, query]);
+    let out = tickers;
+    if (q) {
+      out = tickers.filter((t) => {
+        const a = (t.current_ticker || "").toLowerCase();
+        const b = (t.issuer_name || "").toLowerCase();
+        const c = (t.sector || "").toLowerCase();
+        return a.includes(q) || b.includes(q) || c.includes(q);
+      });
+    }
+
+    const cmpStr = (x: any, y: any) => String(x || "").localeCompare(String(y || ""));
+    const cmpDateDesc = (x?: string | null, y?: string | null) => {
+      const ax = x ? Date.parse(x) : 0;
+      const ay = y ? Date.parse(y) : 0;
+      return ay - ax;
+    };
+
+    const sorted = [...out];
+    if (sortBy === "ticker_asc") {
+      sorted.sort((a, b) => cmpStr(a.current_ticker, b.current_ticker));
+    } else if (sortBy === "sector_asc") {
+      sorted.sort((a, b) => {
+        const s = cmpStr(a.sector, b.sector);
+        if (s !== 0) return s;
+        return cmpDateDesc(a.last_filing_date, b.last_filing_date);
+      });
+    } else {
+      // default: last filing desc
+      sorted.sort((a, b) => cmpDateDesc(a.last_filing_date, b.last_filing_date));
+    }
+
+    return sorted;
+  }, [tickers, query, sortBy]);
 
   return (
     <div className="space-y-4">
@@ -54,14 +83,29 @@ export function TickersPage() {
           <p className="mt-1 text-sm muted">Browse issuers, then drill into insider events.</p>
         </div>
 
-        <div className="w-full max-w-sm">
-          <label className="block text-xs font-medium muted">Search</label>
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            className="input mt-1"
-            placeholder="AAPL, MSFT, ..."
-          />
+        <div className="flex w-full max-w-xl items-end gap-3">
+          <div className="flex-1">
+            <label className="block text-xs font-medium muted">Search</label>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="input mt-1"
+              placeholder="AAPL, MSFT, technology, ..."
+            />
+          </div>
+
+          <div className="w-48">
+            <label className="block text-xs font-medium muted">Sort</label>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as any)}
+              className="input mt-1"
+            >
+              <option value="last_filing_desc">Last filing</option>
+              <option value="ticker_asc">Ticker (A–Z)</option>
+              <option value="sector_asc">Sector (A–Z)</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -95,6 +139,9 @@ export function TickersPage() {
                   </div>
                   <div className="mt-0.5 truncate text-sm text-zinc-800 dark:text-zinc-200">
                     {t.issuer_name || "—"}
+                  </div>
+                  <div className="mt-0.5 truncate text-xs muted-2">
+                    Sector: {t.sector || "—"}
                   </div>
                   <div className="mt-1 text-xs muted-2">
                     CIK: {t.issuer_cik} • Last filing: {fmtDate(t.last_filing_date)}

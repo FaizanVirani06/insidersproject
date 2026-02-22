@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from typing import Any, Dict, List, Optional, Tuple
 
 from insider_platform.config import Config
@@ -13,7 +12,7 @@ def _debug(msg: str) -> None:
     print(f"[aggregate] {msg}")
 
 
-def aggregate_accession(conn: sqlite3.Connection, cfg: Config, accession_number: str) -> List[EventKey]:
+def aggregate_accession(conn: Any, cfg: Config, accession_number: str) -> List[EventKey]:
     """Aggregate raw Form4 rows for an accession into insider_events (one per owner_key)."""
     _debug(f"Aggregating accession {accession_number}")
 
@@ -304,7 +303,7 @@ def aggregate_accession(conn: sqlite3.Connection, cfg: Config, accession_number:
     return event_keys
 
 
-def _rollup_side(rows: List[sqlite3.Row], code: str) -> Dict[str, Any]:
+def _rollup_side(rows: List[Any], code: str) -> Dict[str, Any]:
     """Roll up open-market non-derivative transactions for one side.
 
     code:
@@ -354,7 +353,7 @@ def _rollup_side(rows: List[sqlite3.Row], code: str) -> Dict[str, Any]:
     sof_rows = [r for r in side_rows if isinstance(r["shares_owned_following"], (int, float))]
     if sof_rows:
 
-        def _sof_key(r: sqlite3.Row) -> tuple:
+        def _sof_key(r: Any) -> tuple:
             d = r["transaction_date"] or ""
             try:
                 rid = int(r["row_id"])

@@ -28,9 +28,6 @@ frontend_next_legacy/out/
 .vscode/
 
 # Local databases / logs
-*.sqlite
-*.sqlite-wal
-*.sqlite-shm
 *.log
 
 # Build outputs

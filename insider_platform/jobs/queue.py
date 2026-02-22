@@ -12,10 +12,6 @@ def _debug(msg: str) -> None:
     print(f"[jobs] {msg}")
 
 
-def _dialect(conn: Any) -> str:
-    return str(getattr(conn, "dialect", "sqlite") or "sqlite").lower()
-
-
 @dataclass(frozen=True)
 class Job:
     job_id: int
@@ -42,9 +38,7 @@ def enqueue_job(
 ) -> None:
     """Enqueue a job with dedupe.
 
-    Implementation note:
-    We use `ON CONFLICT(dedupe_key) DO NOTHING` so this works on both SQLite and Postgres
-    without relying on engine-specific IntegrityError classes.
+    This codebase targets PostgreSQL only (via docker).
     """
     now = utcnow_iso()
     payload_json = json.dumps(payload, ensure_ascii=False)
@@ -123,7 +117,6 @@ def enqueue_job(
 
 def claim_next_job(conn: Any, *, allowed_job_types: Optional[set[str]] = None) -> Optional[Job]:
     now = utcnow_iso()
-    dialect = _dialect(conn)
 
     where_extra = ""
     params: list[Any] = [now]
@@ -136,8 +129,8 @@ def claim_next_job(conn: Any, *, allowed_job_types: Optional[set[str]] = None) -
             params.extend(types)
 
     # Atomic "select + update" with RETURNING to avoid race conditions.
-    # Postgres: add SKIP LOCKED so multiple workers don't pile onto the same row.
-    lock_clause = " FOR UPDATE SKIP LOCKED" if dialect.startswith("post") else ""
+    # PostgreSQL: add SKIP LOCKED so multiple workers don't pile onto the same row.
+    lock_clause = " FOR UPDATE SKIP LOCKED"
 
     sql = f"""
     WITH next AS (
@@ -157,14 +150,13 @@ def claim_next_job(conn: Any, *, allowed_job_types: Optional[set[str]] = None) -
     RETURNING job_id, job_type, priority, dedupe_key, payload_json, attempts, max_attempts;
     """
 
-    # NOTE: updated_at=? is the last parameter
     params2 = params + [now]
     row = conn.execute(sql, tuple(params2)).fetchone()
 
     if row is None:
         return None
 
-    payload_json = row["payload_json"] if row is not None else None
+    payload_json = row.get("payload_json") if row is not None else None
     payload = json.loads(payload_json) if payload_json else {}
     return Job(
         job_id=int(row["job_id"]),

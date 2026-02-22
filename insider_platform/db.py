@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import sqlite3
 from contextlib import contextmanager
-from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
-from urllib.parse import urlparse
+from typing import Any, Iterator, List, Optional, Sequence
 
 from insider_platform.schema import get_schema_sql
 from insider_platform.util.time import utcnow_iso
@@ -14,28 +11,11 @@ def _debug(msg: str) -> None:
     print(f"[db] {msg}")
 
 
-def _detect_dialect(dsn: str) -> str:
-    """Return 'postgres' or 'sqlite'."""
-    s = (dsn or "").strip()
-    if not s:
-        return "sqlite"
-    try:
-        scheme = urlparse(s).scheme.lower()
-    except Exception:
-        scheme = ""
-    if scheme in ("postgres", "postgresql"):
-        return "postgres"
-    # Allow sqlite:///path style, but default is file path.
-    if scheme in ("sqlite",):
-        return "sqlite"
-    return "sqlite"
-
-
 def _qmark_to_pct(sql: str) -> str:
-    """Convert SQLite qmark placeholders (?) to psycopg2 placeholders (%s).
+    """Convert qmark placeholders (?) to psycopg2 placeholders (%s).
 
-    This is a lightweight conversion that avoids replacing '?' inside single/double-quoted
-    string literals. It's not a full SQL parser, but it is sufficient for this codebase.
+    We avoid replacing '?' inside single/double-quoted string literals.
+    This is not a full SQL parser, but it is sufficient for this codebase.
     """
     out: List[str] = []
     in_single = False
@@ -125,7 +105,7 @@ class PGCursor:
 
 
 class PGConnection:
-    """A tiny adapter that makes psycopg2 connections look like sqlite3 connections."""
+    """A tiny adapter that exposes a minimal DB-API-like API on top of psycopg2."""
 
     dialect = "postgres"
 
@@ -158,53 +138,23 @@ class PGConnection:
 
 
 @contextmanager
-def connect(db_dsn: str) -> Iterator[Any]:
-    """Connect to SQLite or Postgres with sensible defaults.
-
-    - SQLite: uses WAL + NORMAL sync.
-    - Postgres: uses psycopg2 (RealDictCursor) so rows behave like dicts.
-    """
+def connect(db_dsn: str) -> Iterator[PGConnection]:
+    """Connect to PostgreSQL and yield a connection wrapper."""
     dsn = (db_dsn or "").strip()
-    dialect = _detect_dialect(dsn)
+    if not dsn:
+        raise RuntimeError("DB_DSN is empty; set INSIDER_DATABASE_URL (or DATABASE_URL)")
 
-    if dialect == "postgres":
-        try:
-            import psycopg2
-            import psycopg2.extras
-        except Exception as e:
-            raise RuntimeError(
-                "Postgres selected but psycopg2 is not installed. "
-                "Install psycopg2-binary and try again."
-            ) from e
-
-        # RealDictCursor makes fetchone()/fetchall() rows act like dicts.
-        raw = psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
-        conn = PGConnection(raw)
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-        return
-
-    # SQLite fallback
-    # Support sqlite:///path style
-    if dsn.lower().startswith("sqlite:///"):
-        dsn = dsn[len("sqlite:///") :]
-
-    Path(dsn).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(dsn, timeout=30, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    # Concurrency / performance pragmas (safe defaults for multi-process API+workers)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA synchronous=NORMAL;")
-    conn.execute("PRAGMA busy_timeout=5000;")  # 5s
-    conn.execute("PRAGMA temp_store=MEMORY;")
     try:
-        conn.execute("PRAGMA foreign_keys = ON;")
+        import psycopg2
+        import psycopg2.extras
+    except Exception as e:
+        raise RuntimeError(
+            "psycopg2 is required for PostgreSQL support. Install psycopg2-binary and try again."
+        ) from e
+
+    raw = psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
+    conn = PGConnection(raw)
+    try:
         yield conn
         conn.commit()
     except Exception:
@@ -216,82 +166,92 @@ def connect(db_dsn: str) -> Iterator[Any]:
 
 def init_db(db_dsn: str) -> None:
     """Create all tables and run lightweight migrations."""
-    dialect = _detect_dialect(db_dsn)
-    _debug(f"Initializing DB ({dialect}) at {db_dsn}")
+    _debug(f"Initializing DB (postgres) at {db_dsn}")
     with connect(db_dsn) as conn:
-        schema_sql = get_schema_sql(dialect)
-        # Ensure only one process runs schema DDL at a time.
-        # - Postgres: use an advisory lock.
-        # - SQLite: DDL already takes an exclusive database lock; don't call pg_* functions.
-        if dialect == "postgres":
-            conn.execute("SELECT pg_advisory_lock(2147483647);")
+        # Ensure only one process runs schema DDL at a time (session-level lock).
+        conn.execute("SELECT pg_advisory_lock(2147483647);")
+        try:
+            _exec_schema(conn, get_schema_sql())
+            _migrate(conn)
+        except Exception:
+            # If a DDL statement fails, PostgreSQL marks the current transaction as aborted.
+            # Roll back so we can safely release the advisory lock and re-raise.
+            conn.rollback()
+            raise
+        finally:
             try:
-                _exec_schema(conn, schema_sql, dialect=dialect)
-            finally:
                 conn.execute("SELECT pg_advisory_unlock(2147483647);")
-        else:
-            _exec_schema(conn, schema_sql, dialect=dialect)
-
-        _migrate(conn, dialect=dialect)
-
-
-def _exec_schema(conn: Any, ddl: str, *, dialect: str) -> None:
-    if dialect == "postgres":
-        # Execute multi-statement DDL (naive split is OK for our schema)
-        statements = [s.strip() for s in ddl.split(";") if s.strip()]
-        for stmt in statements:
-            conn.execute(stmt)
-        return
-
-    # SQLite can run it in one go
-    conn.executescript(ddl)
+            except Exception:
+                # If unlock fails for any reason, we don't want to hide the real error.
+                pass
 
 
-def _has_column(conn: Any, table: str, col: str, *, dialect: str) -> bool:
-    if dialect == "postgres":
-        r = conn.execute(
-            """
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_schema='public'
-              AND table_name=?
-              AND column_name=?
-            LIMIT 1
-            """,
-            (table, col),
-        ).fetchone()
-        return r is not None
-
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    # sqlite3.Row has "name"; fallback for tuple rows
-    return any((r["name"] if isinstance(r, sqlite3.Row) else r[1]) == col for r in rows)
+def _exec_schema(conn: Any, ddl: str) -> None:
+    # Execute multi-statement DDL (naive split is OK for our schema)
+    statements = [s.strip() for s in (ddl or "").split(";") if s.strip()]
+    for stmt in statements:
+        conn.execute(stmt)
 
 
-def _table_columns(conn: Any, table: str, *, dialect: str) -> List[str]:
-    if dialect == "postgres":
-        rows = conn.execute(
-            """
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema='public' AND table_name=?
-            ORDER BY ordinal_position
-            """,
-            (table,),
-        ).fetchall()
-        return [str(r["column_name"]) for r in rows]
-
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return [str(r["name"]) for r in rows]
+def _table_exists(conn: Any, table: str) -> bool:
+    r = conn.execute(
+        """
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema='public' AND table_name=?
+        LIMIT 1
+        """,
+        (table,),
+    ).fetchone()
+    return r is not None
 
 
-def _migrate(conn: Any, *, dialect: str) -> None:
+def _has_column(conn: Any, table: str, col: str) -> bool:
+    r = conn.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema='public'
+          AND table_name=?
+          AND column_name=?
+        LIMIT 1
+        """,
+        (table, col),
+    ).fetchone()
+    return r is not None
+
+
+def _table_columns(conn: Any, table: str) -> List[str]:
+    rows = conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema='public' AND table_name=?
+        ORDER BY ordinal_position
+        """,
+        (table,),
+    ).fetchall()
+    return [str(r["column_name"]) for r in rows]
+
+
+def _migrate(conn: Any) -> None:
     """Lightweight forward-only migrations for existing DBs."""
-    # Add ai_outputs.input_json if missing (existing rows get empty string)
-    if not _has_column(conn, "ai_outputs", "input_json", dialect=dialect):
+
+    # --- AI outputs: ensure input_json exists (older DBs) ---
+    if _table_exists(conn, "ai_outputs") and not _has_column(conn, "ai_outputs", "input_json"):
         conn.execute("ALTER TABLE ai_outputs ADD COLUMN input_json TEXT NOT NULL DEFAULT ''")
 
-    # event_outcomes: benchmark + excess return columns (outcomes_v2)
-    if _has_column(conn, "event_outcomes", "issuer_cik", dialect=dialect):
+    # --- Fundamentals cache: sector + beta ---
+    if _table_exists(conn, "issuer_fundamentals_cache"):
+        if not _has_column(conn, "issuer_fundamentals_cache", "sector"):
+            conn.execute("ALTER TABLE issuer_fundamentals_cache ADD COLUMN sector TEXT")
+        if not _has_column(conn, "issuer_fundamentals_cache", "beta"):
+            conn.execute("ALTER TABLE issuer_fundamentals_cache ADD COLUMN beta DOUBLE PRECISION")
+        # Helpful for sorting/grouping by sector
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_fundamentals_sector ON issuer_fundamentals_cache (sector)")
+
+    # --- event_outcomes: benchmark + excess return columns (outcomes_v2) ---
+    if _table_exists(conn, "event_outcomes") and _has_column(conn, "event_outcomes", "issuer_cik"):
         cols_to_add = [
             ("bench_symbol", "TEXT"),
             ("bench_return_60d", "DOUBLE PRECISION"),
@@ -302,11 +262,11 @@ def _migrate(conn: Any, *, dialect: str) -> None:
             ("excess_return_180d", "DOUBLE PRECISION"),
         ]
         for col, ctype in cols_to_add:
-            if not _has_column(conn, "event_outcomes", col, dialect=dialect):
+            if not _has_column(conn, "event_outcomes", col):
                 conn.execute(f"ALTER TABLE event_outcomes ADD COLUMN {col} {ctype}")
 
-    # users: billing / subscription columns (Stripe)
-    if _has_column(conn, "users", "user_id", dialect=dialect):
+    # --- users: billing / subscription columns (Stripe) ---
+    if _table_exists(conn, "users") and _has_column(conn, "users", "user_id"):
         user_cols_to_add = [
             ("stripe_customer_id", "TEXT"),
             ("stripe_subscription_id", "TEXT"),
@@ -317,7 +277,7 @@ def _migrate(conn: Any, *, dialect: str) -> None:
             ("subscription_updated_at", "TEXT"),
         ]
         for col, ctype in user_cols_to_add:
-            if not _has_column(conn, "users", col, dialect=dialect):
+            if not _has_column(conn, "users", col):
                 # Keep defaults lightweight; the application treats missing/NULL as "no subscription".
                 if col == "cancel_at_period_end":
                     conn.execute(f"ALTER TABLE users ADD COLUMN {col} {ctype} NOT NULL DEFAULT 0")
@@ -325,14 +285,14 @@ def _migrate(conn: Any, *, dialect: str) -> None:
                     conn.execute(f"ALTER TABLE users ADD COLUMN {col} {ctype}")
 
 
-def upsert_app_config(conn: Any, key: str, value: str, *, dialect: str | None = None) -> None:
+def upsert_app_config(conn: Any, key: str, value: str) -> None:
     """Upsert a simple key/value config entry.
 
     Older DBs may have an extra NOT NULL `updated_at` column. We support both schemas.
     """
-    d = dialect or getattr(conn, "dialect", "sqlite")
-    cols = _table_columns(conn, "app_config", dialect=d)
+    cols = _table_columns(conn, "app_config")
     now = utcnow_iso()
+
     if "updated_at" in cols:
         conn.execute(
             """

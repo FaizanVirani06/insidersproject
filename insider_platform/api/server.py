@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -546,18 +545,13 @@ class AdminSupportReplyRequest(BaseModel):
     close_thread: bool | None = None
 
 
-def _insert_row_id(conn: Any, *, dialect: str, insert_sql: str, params: tuple[Any, ...], id_col: str) -> int:
-    """Insert a row and return its generated id (sqlite + postgres)."""
+def _insert_row_id(conn: Any, *, insert_sql: str, params: tuple[Any, ...], id_col: str) -> int:
+    """Insert a row and return its generated id (PostgreSQL)."""
 
-    if dialect == "postgres":
-        r = conn.execute(insert_sql + f" RETURNING {id_col}", params).fetchone()
-        if not r or r.get(id_col) is None:
-            raise RuntimeError("insert_failed")
-        return int(r[id_col])
-
-    conn.execute(insert_sql, params)
-    r = conn.execute("SELECT last_insert_rowid() AS id").fetchone()
-    return int(r["id"]) if r is not None else 0
+    r = conn.execute(insert_sql + f" RETURNING {id_col}", params).fetchone()
+    if not r or r.get(id_col) is None:
+        raise RuntimeError("insert_failed")
+    return int(r[id_col])
 
 
 @app.get("/support/thread")
@@ -568,7 +562,6 @@ def support_get_thread(
 
     user_id = int(user.get("user_id"))
     with connect(cfg.DB_DSN) as conn:
-        dialect = str(getattr(conn, "dialect", "sqlite"))
         thread = conn.execute(
             """
             SELECT *
@@ -617,7 +610,6 @@ def support_send_message(
     now = utcnow_iso()
 
     with connect(cfg.DB_DSN) as conn:
-        dialect = str(getattr(conn, "dialect", "sqlite"))
 
         thread = conn.execute(
             """
@@ -633,7 +625,6 @@ def support_send_message(
         if thread is None:
             tid = _insert_row_id(
                 conn,
-                dialect=dialect,
                 insert_sql="""
                 INSERT INTO support_threads (user_id, status, created_at, updated_at, last_message_at)
                 VALUES (?,?,?,?,?)
@@ -646,7 +637,6 @@ def support_send_message(
 
         mid = _insert_row_id(
             conn,
-            dialect=dialect,
             insert_sql="""
             INSERT INTO support_messages (thread_id, sender_role, sender_user_id, message, created_at)
             VALUES (?,?,?,?,?)
@@ -782,7 +772,6 @@ def admin_support_reply(
     admin_id = int(admin.get("user_id"))
 
     with connect(cfg.DB_DSN) as conn:
-        dialect = str(getattr(conn, "dialect", "sqlite"))
         thread = conn.execute(
             "SELECT * FROM support_threads WHERE thread_id=?",
             (tid,),
@@ -792,7 +781,6 @@ def admin_support_reply(
 
         mid = _insert_row_id(
             conn,
-            dialect=dialect,
             insert_sql="""
             INSERT INTO support_messages (thread_id, sender_role, sender_user_id, message, created_at)
             VALUES (?,?,?,?,?)
@@ -869,15 +857,17 @@ def list_tickers(
             ) AS ai_event_count,
             (
                 SELECT COUNT(*)
-                FROM insider_events e
-                WHERE e.issuer_cik = im.issuer_cik
-                  AND (e.cluster_flag_buy=1 OR e.cluster_flag_sell=1)
+                FROM clusters c
+                WHERE c.ticker = im.current_ticker
             ) AS cluster_event_count,
             m.market_cap,
             m.market_cap_bucket,
-            m.market_cap_updated_at
+            m.market_cap_updated_at,
+            f.sector,
+            f.beta
         FROM issuer_master im
         LEFT JOIN market_cap_cache m ON m.ticker = im.current_ticker
+        LEFT JOIN issuer_fundamentals_cache f ON f.ticker = im.current_ticker
         WHERE im.current_ticker IS NOT NULL
         """
         params: List[Any] = []
@@ -1113,7 +1103,7 @@ def list_events(
         raise HTTPException(status_code=400, detail="invalid_side")
 
     sort_by = (sort_by or "filing_date_desc").strip().lower()
-    if sort_by not in ("ai_best_desc", "filing_date_desc"):
+    if sort_by not in ("ai_best_desc", "filing_date_desc", "sector_asc"):
         raise HTTPException(status_code=400, detail="invalid_sort_by")
 
     if not user.get("is_admin"):
@@ -1150,6 +1140,8 @@ def list_events(
 
     if sort_by == "filing_date_desc":
         order_sql = "ORDER BY e.filing_date DESC, e.event_trade_date DESC"
+    elif sort_by == "sector_asc":
+        order_sql = "ORDER BY f.sector ASC NULLS LAST, e.filing_date DESC, e.event_trade_date DESC"
     else:
         order_sql = f"""
         ORDER BY
@@ -1164,9 +1156,12 @@ def list_events(
             SELECT
               e.*,
               {best_ai_expr} AS best_ai_rating,
-              im.issuer_name AS issuer_name
+              im.issuer_name AS issuer_name,
+              f.sector AS sector,
+              f.beta AS beta
             FROM insider_events e
             LEFT JOIN issuer_master im ON im.issuer_cik = e.issuer_cik
+            LEFT JOIN issuer_fundamentals_cache f ON f.ticker = e.ticker
             WHERE {where_sql}
             {order_sql}
             LIMIT ? OFFSET ?
@@ -1446,14 +1441,7 @@ def admin_monitoring(
     limit_types: int = Query(25, ge=1, le=200),
     _admin: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
-    """Lightweight operational metrics for admins.
-
-    Designed to help decide when to run more workers:
-    - queue depth (pending by job_type)
-    - throughput over time (success/error per hour)
-    - end-to-end latency (enqueue -> completed for successful jobs)
-    - recent errors
-    """
+    """Lightweight operational metrics for admins."""
 
     def _to_int(x: Any) -> int:
         try:
@@ -1470,8 +1458,6 @@ def admin_monitoring(
             return None
 
     with connect(cfg.DB_DSN) as conn:
-        dialect = str(getattr(conn, "dialect", "sqlite"))
-
         # Status counts
         srows = conn.execute(
             "SELECT status, COUNT(*) AS count FROM jobs GROUP BY status ORDER BY status"
@@ -1481,26 +1467,14 @@ def admin_monitoring(
         # Oldest pending age (seconds)
         oldest_pending_age_sec: float | None = None
         if status_counts.get("pending", 0) > 0:
-            if dialect == "postgres":
-                r = conn.execute(
-                    """
-                    SELECT EXTRACT(EPOCH FROM (NOW() - MIN(created_at::timestamptz))) AS age_sec
-                    FROM jobs
-                    WHERE status='pending'
-                    """
-                ).fetchone()
-                oldest_pending_age_sec = _to_float(r["age_sec"] if r else None)
-            else:
-                r = conn.execute(
-                    "SELECT MIN(created_at) AS oldest FROM jobs WHERE status='pending'"
-                ).fetchone()
-                if r and r.get("oldest"):
-                    try:
-                        oldest = str(r["oldest"]).replace("Z", "+00:00")
-                        dt_oldest = datetime.fromisoformat(oldest)
-                        oldest_pending_age_sec = float((datetime.now(timezone.utc) - dt_oldest).total_seconds())
-                    except Exception:
-                        oldest_pending_age_sec = None
+            r = conn.execute(
+                """
+                SELECT EXTRACT(EPOCH FROM (NOW() - MIN(created_at::timestamptz))) AS age_sec
+                FROM jobs
+                WHERE status='pending'
+                """
+            ).fetchone()
+            oldest_pending_age_sec = _to_float(r["age_sec"] if r else None)
 
         # Pending + error breakdown
         pending_by_type = conn.execute(
@@ -1528,37 +1502,19 @@ def admin_monitoring(
         ).fetchall()
 
         # Throughput per hour
-        if dialect == "postgres":
-            trows = conn.execute(
-                """
-                SELECT date_trunc('hour', updated_at::timestamptz) AS bucket,
-                       status,
-                       COUNT(*) AS count
-                FROM jobs
-                WHERE status IN ('success','error')
-                  AND updated_at::timestamptz >= (NOW() - (? * INTERVAL '1 hour'))
-                GROUP BY bucket, status
-                ORDER BY bucket ASC
-                """,
-                (window_hours,),
-            ).fetchall()
-        else:
-            start_iso = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat().replace(
-                "+00:00", "Z"
-            )
-            trows = conn.execute(
-                """
-                SELECT substr(updated_at, 1, 13) AS bucket,
-                       status,
-                       COUNT(*) AS count
-                FROM jobs
-                WHERE status IN ('success','error')
-                  AND updated_at >= ?
-                GROUP BY bucket, status
-                ORDER BY bucket ASC
-                """,
-                (start_iso,),
-            ).fetchall()
+        trows = conn.execute(
+            """
+            SELECT date_trunc('hour', updated_at::timestamptz) AS bucket,
+                   status,
+                   COUNT(*) AS count
+            FROM jobs
+            WHERE status IN ('success','error')
+              AND updated_at::timestamptz >= (NOW() - (? * INTERVAL '1 hour'))
+            GROUP BY bucket, status
+            ORDER BY bucket ASC
+            """,
+            (window_hours,),
+        ).fetchall()
 
         # Build full bucket list so the chart is stable.
         end_bucket = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
@@ -1570,76 +1526,53 @@ def admin_monitoring(
         }
 
         for r in trows:
-            st = str(r["status"]) if r.get("status") is not None else ""
+            st = str(r.get("status")) if r.get("status") is not None else ""
             if st not in ("success", "error"):
                 continue
 
             bucket_val = r.get("bucket")
-            if dialect == "postgres":
-                # date_trunc(timestamptz) returns a datetime
-                if isinstance(bucket_val, datetime):
-                    bdt = bucket_val
-                else:
-                    try:
-                        bdt = datetime.fromisoformat(str(bucket_val).replace("Z", "+00:00"))
-                    except Exception:
-                        continue
-                bkey = bdt.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0).isoformat().replace(
-                    "+00:00", "Z"
-                )
+            if isinstance(bucket_val, datetime):
+                bdt = bucket_val
             else:
-                b = str(bucket_val)
-                # sqlite bucket is 'YYYY-MM-DDTHH'
-                bkey = (b + ":00:00Z") if len(b) == 13 else b
+                try:
+                    bdt = datetime.fromisoformat(str(bucket_val).replace("Z", "+00:00"))
+                except Exception:
+                    continue
 
+            bkey = (
+                bdt.astimezone(timezone.utc)
+                .replace(minute=0, second=0, microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
             if bkey not in points:
-                # If the DB returns a bucket slightly outside the generated range, ignore it.
                 continue
-
             points[bkey][st] = _to_int(r.get("count"))
 
         throughput_hourly = [points[k] for k in sorted(points.keys())]
 
         # Latency (successful jobs only)
-        if dialect == "postgres":
-            lrows = conn.execute(
-                """
-                WITH base AS (
-                  SELECT job_type,
-                         EXTRACT(EPOCH FROM (updated_at::timestamptz - created_at::timestamptz)) AS latency_sec
-                  FROM jobs
-                  WHERE status='success'
-                    AND updated_at::timestamptz >= (NOW() - (? * INTERVAL '1 hour'))
-                )
-                SELECT job_type,
-                       COUNT(*) AS n,
-                       AVG(latency_sec) AS avg_sec,
-                       percentile_cont(0.50) WITHIN GROUP (ORDER BY latency_sec) AS p50_sec,
-                       percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_sec) AS p95_sec
-                FROM base
-                GROUP BY job_type
-                ORDER BY n DESC
-                LIMIT ?
-                """,
-                (window_hours, limit_types),
-            ).fetchall()
-        else:
-            start_iso = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat().replace(
-                "+00:00", "Z"
+        lrows = conn.execute(
+            """
+            WITH base AS (
+              SELECT job_type,
+                     EXTRACT(EPOCH FROM (updated_at::timestamptz - created_at::timestamptz)) AS latency_sec
+              FROM jobs
+              WHERE status='success'
+                AND updated_at::timestamptz >= (NOW() - (? * INTERVAL '1 hour'))
             )
-            lrows = conn.execute(
-                """
-                SELECT job_type,
-                       COUNT(*) AS n,
-                       AVG((julianday(updated_at) - julianday(created_at)) * 86400.0) AS avg_sec
-                FROM jobs
-                WHERE status='success' AND updated_at >= ?
-                GROUP BY job_type
-                ORDER BY n DESC
-                LIMIT ?
-                """,
-                (start_iso, limit_types),
-            ).fetchall()
+            SELECT job_type,
+                   COUNT(*) AS n,
+                   AVG(latency_sec) AS avg_sec,
+                   percentile_cont(0.50) WITHIN GROUP (ORDER BY latency_sec) AS p50_sec,
+                   percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_sec) AS p95_sec
+            FROM base
+            GROUP BY job_type
+            ORDER BY n DESC
+            LIMIT ?
+            """,
+            (window_hours, limit_types),
+        ).fetchall()
 
         latency_by_type: List[Dict[str, Any]] = []
         for r in lrows:
@@ -1648,8 +1581,8 @@ def admin_monitoring(
                     "job_type": str(r.get("job_type")),
                     "n": _to_int(r.get("n")),
                     "avg_sec": _to_float(r.get("avg_sec")),
-                    "p50_sec": _to_float(r.get("p50_sec")) if "p50_sec" in r else None,
-                    "p95_sec": _to_float(r.get("p95_sec")) if "p95_sec" in r else None,
+                    "p50_sec": _to_float(r.get("p50_sec")),
+                    "p95_sec": _to_float(r.get("p95_sec")),
                 }
             )
 
@@ -1685,7 +1618,7 @@ def admin_monitoring(
         return {
             "now": utcnow_iso(),
             "window_hours": window_hours,
-            "dialect": dialect,
+            "dialect": "postgres",
             "status_counts": status_counts,
             "oldest_pending_age_sec": oldest_pending_age_sec,
             "pending_by_type": [

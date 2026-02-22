@@ -48,6 +48,12 @@ SCALE / SIGNIFICANCE (IMPORTANT):
   - mid/large: mixed informativeness
   - mega: insider trades tend to be LESS informative
 
+VOLATILITY / BETA (IMPORTANT):
+- Use $.issuer_context.fundamentals.beta when present (market sensitivity / volatility proxy).
+  - beta >= 1.5: higher volatility -> lower confidence and call out volatility risk.
+  - beta <= 0.8: lower volatility -> modestly higher confidence, all else equal.
+- Do not compute beta; just interpret the provided value.
+
 INSIDER HISTORY (IMPORTANT):
 - Use $.insider_history.prior_buy_events_total / prior_sell_events_total.
   First/second-ever buys/sells are more informative than routine activity.

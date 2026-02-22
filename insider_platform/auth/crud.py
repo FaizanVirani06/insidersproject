@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 from typing import Any, Dict, Optional
 
 from insider_platform.config import Config
@@ -14,7 +13,7 @@ def normalize_username(username: str) -> str:
     return (username or "").strip().lower()
 
 
-def public_user(row: sqlite3.Row | Dict[str, Any]) -> Dict[str, Any]:
+def public_user(row: Any | Dict[str, Any]) -> Dict[str, Any]:
     d = dict(row)
     d.pop("password_hash", None)
     # Convenience flag used by the frontend for gating.
@@ -23,7 +22,7 @@ def public_user(row: sqlite3.Row | Dict[str, Any]) -> Dict[str, Any]:
     return d
 
 
-def get_user_by_stripe_customer_id(conn: sqlite3.Connection, stripe_customer_id: str) -> Optional[sqlite3.Row]:
+def get_user_by_stripe_customer_id(conn: Any, stripe_customer_id: str) -> Optional[Any]:
     cid = (stripe_customer_id or "").strip()
     if not cid:
         return None
@@ -34,7 +33,7 @@ def get_user_by_stripe_customer_id(conn: sqlite3.Connection, stripe_customer_id:
 
 
 def update_user_subscription(
-    conn: sqlite3.Connection,
+    conn: Any,
     *,
     user_id: int,
     stripe_customer_id: str | None = None,
@@ -76,7 +75,7 @@ def update_user_subscription(
     )
 
 
-def get_user_by_username(conn: sqlite3.Connection, username: str) -> Optional[sqlite3.Row]:
+def get_user_by_username(conn: Any, username: str) -> Optional[Any]:
     u = normalize_username(username)
     if not u:
         return None
@@ -86,14 +85,14 @@ def get_user_by_username(conn: sqlite3.Connection, username: str) -> Optional[sq
     ).fetchone()
 
 
-def get_user_by_id(conn: sqlite3.Connection, user_id: int) -> Optional[sqlite3.Row]:
+def get_user_by_id(conn: Any, user_id: int) -> Optional[Any]:
     return conn.execute(
         "SELECT * FROM users WHERE user_id=?",
         (int(user_id),),
     ).fetchone()
 
 
-def verify_user_credentials(conn: sqlite3.Connection, username: str, password: str) -> Optional[sqlite3.Row]:
+def verify_user_credentials(conn: Any, username: str, password: str) -> Optional[Any]:
     row = get_user_by_username(conn, username)
     if row is None:
         return None
@@ -105,7 +104,7 @@ def verify_user_credentials(conn: sqlite3.Connection, username: str, password: s
 
 
 def create_user(
-    conn: sqlite3.Connection,
+    conn: Any,
     *,
     username: str,
     password: str,
@@ -136,7 +135,7 @@ def create_user(
     return public_user(row)
 
 
-def touch_last_login(conn: sqlite3.Connection, user_id: int) -> None:
+def touch_last_login(conn: Any, user_id: int) -> None:
     now = utcnow_iso()
     conn.execute(
         "UPDATE users SET last_login_at=?, updated_at=? WHERE user_id=?",
