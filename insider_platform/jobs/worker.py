@@ -181,6 +181,11 @@ def _run_job(conn: Any, cfg: Config, job_type: str, payload: Dict[str, Any]) -> 
         form_type = payload.get("form_type")
         force = bool(payload.get("force") or False)
 
+        # IMPORTANT: We only generate AI for poller-discovered (new) filings. This flag is
+        # propagated through the ingest pipeline so backfills/reparses do not trigger AI calls.
+        ai_requested = bool(payload.get("ai_requested") or False)
+        ingest_source = str(payload.get("ingest_source") or "").strip() or ("poller" if ai_requested else "manual")
+
         fetch_accession_document(
             conn,
             cfg,
@@ -196,14 +201,22 @@ def _run_job(conn: Any, cfg: Config, job_type: str, payload: Dict[str, Any]) -> 
             conn,
             job_type="PARSE_ACCESSION_DOCS",
             dedupe_key=f"PARSE|{accession}|{cfg.CURRENT_PARSE_VERSION}",
-            payload={"accession_number": accession},
+            payload={
+                "accession_number": accession,
+                "ingest_source": ingest_source,
+                "ai_requested": ai_requested,
+            },
             priority=20,
             requeue_if_exists=True,
+            # If a job is already pending, allow a "new filing" promotion to update payload/priority.
+            promote_if_pending=True,
         )
         return
 
     if job_type == "PARSE_ACCESSION_DOCS":
         accession = str(payload["accession_number"]).strip()
+        ai_requested = bool(payload.get("ai_requested") or False)
+        ingest_source = str(payload.get("ingest_source") or "").strip() or ("poller" if ai_requested else "manual")
         res = parse_accession_document(conn, cfg, accession)
 
         # Enqueue aggregation next (deterministic)
@@ -211,9 +224,14 @@ def _run_job(conn: Any, cfg: Config, job_type: str, payload: Dict[str, Any]) -> 
             conn,
             job_type="AGGREGATE_ACCESSION",
             dedupe_key=f"AGG|{accession}|{cfg.CURRENT_PARSE_VERSION}",
-            payload={"accession_number": accession},
+            payload={
+                "accession_number": accession,
+                "ingest_source": ingest_source,
+                "ai_requested": ai_requested,
+            },
             priority=20,
             requeue_if_exists=True,
+            promote_if_pending=True,
         )
 
         # Also enqueue price fetch + market cap fetch + cluster compute (ticker known after parse)
@@ -322,6 +340,8 @@ def _run_job(conn: Any, cfg: Config, job_type: str, payload: Dict[str, Any]) -> 
                     "issuer_cik_hint": issuer_cik,
                     "filing_date": r["filing_date"],
                     "form_type": r["form_type"],
+                    "ingest_source": "backfill",
+                    "ai_requested": False,
                 },
                 priority=5,
                 requeue_if_exists=True,
@@ -349,9 +369,13 @@ def _run_job(conn: Any, cfg: Config, job_type: str, payload: Dict[str, Any]) -> 
     # -------------------------------------------------------------------------
     if job_type == "AGGREGATE_ACCESSION":
         accession = str(payload["accession_number"]).strip()
+        ai_requested = bool(payload.get("ai_requested") or False)
+        ingest_source = str(payload.get("ingest_source") or "").strip() or ("poller" if ai_requested else "manual")
+
         event_keys = aggregate_accession(conn, cfg, accession)
 
-        # For each event, compute trend + outcomes, then schedule AI (AI job will self-gate)
+        # For each event, compute trend + outcomes.
+        # AI is *only* enqueued for poller-discovered (new) filings to keep AI API usage bounded.
         for ek in event_keys:
             enqueue_job(
                 conn,
@@ -379,19 +403,23 @@ def _run_job(conn: Any, cfg: Config, job_type: str, payload: Dict[str, Any]) -> 
                 requeue_if_exists=True,
             )
 
-            enqueue_job(
-                conn,
-                job_type="RUN_AI_FOR_EVENT",
-                dedupe_key=f"AI|{ek.issuer_cik}|{ek.owner_key}|{ek.accession_number}|{cfg.PROMPT_VERSION}",
-                payload={
-                    "issuer_cik": ek.issuer_cik,
-                    "owner_key": ek.owner_key,
-                    "accession_number": ek.accession_number,
-                },
-                priority=200,
-                max_attempts=10,
-                requeue_if_exists=True,
-            )
+            if ai_requested:
+                enqueue_job(
+                    conn,
+                    job_type="RUN_AI_FOR_EVENT",
+                    dedupe_key=f"AI|{ek.issuer_cik}|{ek.owner_key}|{ek.accession_number}|{cfg.PROMPT_VERSION}",
+                    payload={
+                        "issuer_cik": ek.issuer_cik,
+                        "owner_key": ek.owner_key,
+                        "accession_number": ek.accession_number,
+                        "ingest_source": ingest_source,
+                        "ai_requested": True,
+                    },
+                    priority=200,
+                    max_attempts=10,
+                    # Do NOT requeue by default; use the admin endpoint to regenerate AI explicitly.
+                    requeue_if_exists=False,
+                )
         return
 
     if job_type == "FETCH_EOD_PRICES_FOR_ISSUER":
@@ -470,6 +498,13 @@ def _run_job(conn: Any, cfg: Config, job_type: str, payload: Dict[str, Any]) -> 
             accession_number=str(payload["accession_number"]),
         )
         force = bool(payload.get("force") or False)
+
+        # Only generate AI for poller-discovered (new) filings.
+        # - Backfills/reparses historically created thousands of events and would spam the AI API.
+        # - Admin can override with force=True via /admin/event/.../regenerate_ai
+        ai_requested = bool(payload.get("ai_requested") or False)
+        if not force and not ai_requested:
+            return
 
         prereq = conn.execute(
             """
@@ -598,8 +633,22 @@ def _requeue_missing_benchmark_outcomes(conn: Any, cfg: Config) -> None:
         """
         SELECT DISTINCT issuer_cik, owner_key, accession_number
         FROM event_outcomes
-        WHERE bench_missing_reason_60d IN ('missing_benchmark_series','benchmark_anchor_missing','benchmark_future_missing')
-           OR bench_missing_reason_180d IN ('missing_benchmark_series','benchmark_anchor_missing','benchmark_future_missing')
+        WHERE bench_missing_reason_60d IN (
+                'missing_benchmark_series',
+                'benchmark_anchor_not_found',
+                'insufficient_benchmark_future_data',
+                -- backward compatible (older reason strings)
+                'benchmark_anchor_missing',
+                'benchmark_future_missing'
+              )
+           OR bench_missing_reason_180d IN (
+                'missing_benchmark_series',
+                'benchmark_anchor_not_found',
+                'insufficient_benchmark_future_data',
+                -- backward compatible (older reason strings)
+                'benchmark_anchor_missing',
+                'benchmark_future_missing'
+              )
         LIMIT 5000
         """
     ).fetchall()
@@ -637,7 +686,7 @@ def _enqueue_reparse_ticker(conn: Any, cfg: Config, ticker: str) -> None:
                 conn,
                 job_type="PARSE_ACCESSION_DOCS",
                 dedupe_key=f"PARSE|{acc}|{cfg.CURRENT_PARSE_VERSION}",
-                payload={"accession_number": acc},
+                payload={"accession_number": acc, "ingest_source": "reparse", "ai_requested": False},
                 priority=5,
                 requeue_if_exists=True,
             )
@@ -646,7 +695,7 @@ def _enqueue_reparse_ticker(conn: Any, cfg: Config, ticker: str) -> None:
                 conn,
                 job_type="FETCH_ACCESSION_DOCS",
                 dedupe_key=f"FETCH|{acc}",
-                payload={"accession_number": acc},
+                payload={"accession_number": acc, "ingest_source": "reparse", "ai_requested": False},
                 priority=5,
                 requeue_if_exists=True,
             )

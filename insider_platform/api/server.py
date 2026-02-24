@@ -1775,6 +1775,9 @@ def admin_regenerate_ai(
                 "owner_key": owner_key,
                 "accession_number": acc,
                 "force": bool(payload.force),
+                # Explicit admin action -> allow AI regardless of ingest source.
+                "ingest_source": "admin",
+                "ai_requested": True,
             },
             # Admin-triggered regenerate should jump to the front and overwrite
             # any existing pending non-force job for the same event.

@@ -101,9 +101,21 @@ def aggregate_accession(conn: Any, cfg: Config, accession_number: str) -> List[E
         buy_roll = _rollup_side(rows, code="P")
         sell_roll = _rollup_side(rows, code="S")
 
-        # Spec: event_trade_date is the earliest transaction date anywhere in the filing (not side-specific)
-        all_dates = [r["transaction_date"] for r in rows if r["transaction_date"]]
-        event_trade_date = min(all_dates) if all_dates else None
+        # event_trade_date should reflect the earliest *open-market* activity when present.
+        # This improves downstream trend/outcomes anchoring and avoids being skewed by
+        # grants/exercises/withholding rows that can appear earlier in the same filing.
+        open_market_dates: List[str] = []
+        if buy_roll.get("has") and buy_roll.get("trade_date"):
+            open_market_dates.append(str(buy_roll.get("trade_date")))
+        if sell_roll.get("has") and sell_roll.get("trade_date"):
+            open_market_dates.append(str(sell_roll.get("trade_date")))
+
+        if open_market_dates:
+            event_trade_date = min(open_market_dates)
+        else:
+            # Fallback: earliest transaction date anywhere in the filing.
+            all_dates = [r["transaction_date"] for r in rows if r["transaction_date"]]
+            event_trade_date = min(all_dates) if all_dates else None
 
         now = utcnow_iso()
 
@@ -205,12 +217,12 @@ def aggregate_accession(conn: Any, cfg: Config, accession_number: str) -> List[E
                 parse_version=excluded.parse_version,
                 event_computed_at=excluded.event_computed_at,
 
-                -- Clear derived fields to force recompute
+                -- Clear derived fields to force recompute (except AI, which is expensive and only regenerated explicitly
+                -- or for poller-discovered new filings).
                 trend_computed_at=NULL,
                 outcomes_computed_at=NULL,
                 stats_computed_at=NULL,
                 cluster_computed_at=NULL,
-                ai_computed_at=NULL,
 
                 trend_anchor_trading_date=NULL,
                 trend_close=NULL,
@@ -226,13 +238,6 @@ def aggregate_accession(conn: Any, cfg: Config, accession_number: str) -> List[E
                 cluster_id_buy=NULL,
                 cluster_flag_sell=NULL,
                 cluster_id_sell=NULL,
-
-                ai_buy_rating=NULL,
-                ai_sell_rating=NULL,
-                ai_confidence=NULL,
-                ai_model_id=NULL,
-                ai_prompt_version=NULL,
-                ai_generated_at=NULL,
 
                 -- Keep market cap snapshot if we have it (do not overwrite with NULL)
                 market_cap=COALESCE(excluded.market_cap, insider_events.market_cap),

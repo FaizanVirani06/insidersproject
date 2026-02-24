@@ -194,9 +194,20 @@ def _fetch_filing_footnotes(conn: Any, issuer_cik: str, accession_number: str) -
         if not isinstance(foots, list):
             continue
         for f in foots:
-            if not isinstance(f, str):
+            # Parser stores footnotes as either:
+            #   - list[str] (legacy)
+            #   - list[{"id": "F1", "text": "..."}] (current)
+            txt = None
+            if isinstance(f, str):
+                txt = f
+            elif isinstance(f, dict):
+                t = f.get("text")
+                if isinstance(t, str):
+                    txt = t
+            if not isinstance(txt, str):
                 continue
-            txt = f.strip()
+
+            txt = txt.strip()
             if not txt:
                 continue
             # normalize whitespace
@@ -210,6 +221,64 @@ def _fetch_filing_footnotes(conn: Any, issuer_cik: str, accession_number: str) -
             if len(out) >= 20:
                 return out
     return out
+
+
+def _parse_iso_date(d: Any) -> Optional[date]:
+    if not d:
+        return None
+    try:
+        return date.fromisoformat(str(d)[:10])
+    except Exception:
+        return None
+
+
+def _days_between(d0: Any, d1: Any) -> Optional[int]:
+    """Return whole-day difference (d1 - d0) in days using ISO date strings."""
+    a = _parse_iso_date(d0)
+    b = _parse_iso_date(d1)
+    if a is None or b is None:
+        return None
+    try:
+        return int((b - a).days)
+    except Exception:
+        return None
+
+
+def _detect_footnote_indicators(footnotes: List[str]) -> Dict[str, Any]:
+    """Heuristic flags derived from filing footnotes.
+
+    These are intentionally conservative and used as *weak priors*.
+    """
+    text = " ".join([f for f in footnotes if isinstance(f, str)]).lower()
+
+    # 10b5-1 / trading plan references
+    mentions_10b5_1 = bool(re.search(r"10b5\s*[-‑–—]?\s*1", text)) or ("rule 10b5" in text)
+    mentions_trading_plan = ("trading plan" in text) or ("pre-arranged" in text) or ("prearranged" in text)
+
+    # Common mechanical-sale language (tax / withholding / sell-to-cover).
+    mentions_tax_or_withholding = any(
+        k in text
+        for k in (
+            "tax",
+            "withhold",
+            "withholding",
+            "sell to cover",
+            "sell-to-cover",
+            "to cover",
+            "to satisfy",
+            "covering",
+        )
+    )
+
+    # A combined flag that is most relevant for interpreting sells.
+    plan_or_mechanical_sale_possible = bool(mentions_10b5_1 or mentions_trading_plan or mentions_tax_or_withholding)
+
+    return {
+        "mentions_10b5_1": mentions_10b5_1,
+        "mentions_trading_plan": mentions_trading_plan,
+        "mentions_tax_or_withholding": mentions_tax_or_withholding,
+        "plan_or_mechanical_sale_possible": plan_or_mechanical_sale_possible,
+    }
 
 
 def build_ai_input(conn: Any, cfg: Config, event_key: EventKey) -> Dict[str, Any]:
@@ -314,10 +383,23 @@ def build_ai_input(conn: Any, cfg: Config, event_key: EventKey) -> Dict[str, Any
     }
 
     # Trend context (event-level)
+    # Use the earliest open-market trade date as the semantic "signal" date when possible.
+    trend_trade_date = row["event_trade_date"]
+    try:
+        open_mkt_dates: list[str] = []
+        if int(row.get("has_buy") or 0) == 1 and row.get("buy_trade_date"):
+            open_mkt_dates.append(str(row["buy_trade_date"]))
+        if int(row.get("has_sell") or 0) == 1 and row.get("sell_trade_date"):
+            open_mkt_dates.append(str(row["sell_trade_date"]))
+        if open_mkt_dates:
+            trend_trade_date = min(open_mkt_dates)
+    except Exception:
+        pass
+
     trend_missing = row["trend_missing_reason"] is not None and row["trend_missing_reason"] != ""
     trend_context = {
         "price_reference": {
-            "trade_date": row["event_trade_date"],
+            "trade_date": trend_trade_date,
             "nearest_trading_date": row["trend_anchor_trading_date"],
             "close": row["trend_close"],
         },
@@ -356,6 +438,12 @@ def build_ai_input(conn: Any, cfg: Config, event_key: EventKey) -> Dict[str, Any
         multiple = None
         trade_value_pct_mcap = None
 
+        # Filing delay is useful context: you can only act after the filing is public.
+        filing_delay_days = _days_between(trade_date, row.get("filing_date"))
+        if filing_delay_days is not None and filing_delay_days < 0:
+            # Defensive: if clocks/inputs are weird, don't produce negative delays.
+            filing_delay_days = 0
+
         if isinstance(shares, (int, float)) and isinstance(after, (int, float)) and float(shares) > 0:
             if side == "buy":
                 before = float(after) - float(shares)
@@ -374,6 +462,7 @@ def build_ai_input(conn: Any, cfg: Config, event_key: EventKey) -> Dict[str, Any
         return {
             "has_" + side: has_side,
             "trade_date": trade_date,
+            "filing_delay_days": filing_delay_days,
             "shares": shares,
             "dollars": dollars,
             "vwap_price": vwap,
@@ -438,8 +527,10 @@ def build_ai_input(conn: Any, cfg: Config, event_key: EventKey) -> Dict[str, Any
         "market_cap_staleness_days": mcap_stale_days,
     }
 
+    footnotes = _fetch_filing_footnotes(conn, event_key.issuer_cik, event_key.accession_number)
     filing_context = {
-        "footnotes": _fetch_filing_footnotes(conn, event_key.issuer_cik, event_key.accession_number),
+        "footnotes": footnotes,
+        "indicators": _detect_footnote_indicators(footnotes),
         "notes": "Footnotes are extracted from the filing when available; treat as context, not as definitive intent.",
     }
 
@@ -814,8 +905,14 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
     cluster_context = ai_input.get("cluster_context") or {}
     trend_context = ai_input.get("trend_context") or {}
     data_quality = ai_input.get("data_quality") or {}
+    filing_context = ai_input.get("filing_context") or {}
     insider_history = ai_input.get("insider_history") or {}
     insider_stats = ai_input.get("insider_stats") or {}
+
+    footnote_indicators = (filing_context.get("indicators") or {}) if isinstance(filing_context, dict) else {}
+    plan_or_mech = bool(footnote_indicators.get("plan_or_mechanical_sale_possible"))
+    mentions_10b5_1 = bool(footnote_indicators.get("mentions_10b5_1"))
+    mentions_tax = bool(footnote_indicators.get("mentions_tax_or_withholding"))
 
     bucket = issuer_context.get("market_cap_bucket")
     fundamentals = issuer_context.get("fundamentals") or {}
@@ -867,26 +964,53 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
         return 0.0
 
     def _pct_base(pct: Optional[float], *, is_buy: bool) -> float:
-        # pct is already a percentage (e.g. 190.0 means +190%).
+        """Base rating from % change in holdings.
+
+        pct is already a percentage (e.g. 190.0 means +190%).
+        We intentionally score sells more conservatively than buys: discretionary intent is
+        less clear for many sells (diversification, taxes, plans, compensation).
+        """
+        if is_buy:
+            if pct is None:
+                return 5.6
+            if pct >= 200:
+                return 9.5
+            if pct >= 100:
+                return 9.0
+            if pct >= 50:
+                return 8.5
+            if pct >= 25:
+                return 8.0
+            if pct >= 10:
+                return 7.5
+            if pct >= 5:
+                return 7.0
+            if pct >= 2:
+                return 6.5
+            if pct >= 1:
+                return 5.8
+            return 5.2
+
+        # Sell side (more conservative mapping)
         if pct is None:
-            return 5.6 if is_buy else 5.4
+            return 5.0
         if pct >= 200:
-            return 9.5 if is_buy else 9.0
+            return 8.7
         if pct >= 100:
-            return 9.0 if is_buy else 8.5
+            return 8.2
         if pct >= 50:
-            return 8.5 if is_buy else 8.0
+            return 7.6
         if pct >= 25:
-            return 8.0 if is_buy else 7.5
+            return 7.0
         if pct >= 10:
-            return 7.5 if is_buy else 7.0
+            return 6.3
         if pct >= 5:
-            return 7.0 if is_buy else 6.5
-        if pct >= 2:
-            return 6.5
-        if pct >= 1:
             return 5.8
-        return 5.2
+        if pct >= 2:
+            return 5.4
+        if pct >= 1:
+            return 5.1
+        return 4.8
 
     def _trade_size_adj(dollars: Any, pct_mcap: Any) -> float:
         # Prefer % of market cap if we have it.
@@ -1003,6 +1127,18 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
         buy_rating_f += _cluster_adj(cluster_context.get("buy_cluster") or {})
         buy_rating_f += _trend_adj(is_buy=True)
 
+        # Filing delay penalty (tradeability / staleness)
+        try:
+            dly = buy.get("filing_delay_days")
+            dly_i = int(dly) if dly is not None else None
+        except Exception:
+            dly_i = None
+        if dly_i is not None:
+            if dly_i >= 10:
+                buy_rating_f -= 0.25
+            elif dly_i >= 3:
+                buy_rating_f -= 0.10
+
         buy_rating_f = _clamp(buy_rating_f, 1.0, 10.0)
         buy_rating = round(buy_rating_f, 1)
 
@@ -1018,6 +1154,11 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
             conf -= 0.07
         if data_quality.get("trend_missing"):
             conf -= 0.05
+        if dly_i is not None:
+            if dly_i >= 10:
+                conf -= 0.10
+            elif dly_i >= 3:
+                conf -= 0.05
         conf += _beta_conf_adj(beta)
         buy_conf = _clamp(conf, 0.0, 1.0)
 
@@ -1044,20 +1185,55 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
         sell_rating_f += _cluster_adj(cluster_context.get("sell_cluster") or {})
         sell_rating_f += _trend_adj(is_buy=False)
 
+        # Sell interpretation penalties (conservative by default)
+        # - If footnotes suggest a 10b5-1 / plan / tax-withholding / sell-to-cover, intent is ambiguous.
+        if plan_or_mech:
+            sell_rating_f -= 0.90
+            sell_reasons.append("possible_plan_or_withholding")
+
+        # Filing delay penalty (tradeability / staleness)
+        try:
+            sdly = sell.get("filing_delay_days")
+            sdly_i = int(sdly) if sdly is not None else None
+        except Exception:
+            sdly_i = None
+        if sdly_i is not None:
+            if sdly_i >= 10:
+                sell_rating_f -= 0.35
+            elif sdly_i >= 3:
+                sell_rating_f -= 0.15
+
+        # Extra conservatism for small trims without clustering.
+        try:
+            is_cluster = bool((cluster_context.get("sell_cluster") or {}).get("cluster_flag"))
+        except Exception:
+            is_cluster = False
+        if not is_cluster:
+            if (sell_pct_f is not None and sell_pct_f < 10) and sell_trade_size_adj < 0.2:
+                sell_rating_f -= 0.50
+                sell_reasons.append("small_trim_ambiguous")
+
         sell_rating_f = _clamp(sell_rating_f, 1.0, 10.0)
         sell_rating = round(sell_rating_f, 1)
 
-        conf = 0.38
+        conf = 0.32
         if sell_pct_f is not None and sell_pct_f >= 25:
-            conf += 0.10
+            conf += 0.08
         if _is_ceo(title) or _is_cfo(title):
-            conf += 0.05
-        if bool((cluster_context.get("sell_cluster") or {}).get("cluster_flag")):
+            conf += 0.04
+        if is_cluster:
             conf += 0.05
         if data_quality.get("sell_vwap_is_partial"):
             conf -= 0.07
         if data_quality.get("trend_missing"):
             conf -= 0.05
+        if plan_or_mech:
+            conf -= 0.12
+        if sdly_i is not None:
+            if sdly_i >= 10:
+                conf -= 0.10
+            elif sdly_i >= 3:
+                conf -= 0.05
         conf += _beta_conf_adj(beta)
         sell_conf = _clamp(conf, 0.0, 1.0)
 

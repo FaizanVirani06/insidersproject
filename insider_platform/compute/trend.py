@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from statistics import mean
-from typing import List, Tuple, Optional
+from typing import Any, List, Tuple, Optional
 
 from insider_platform.models import EventKey
 from insider_platform.util.time import utcnow_iso
@@ -14,12 +14,17 @@ def _debug(msg: str) -> None:
 def compute_trend_for_event(conn: Any, event_key: EventKey) -> None:
     """Compute trend context for an event using adjusted close prices.
 
-    Anchor trading day: first trading day on/after event_trade_date.
+    Anchor trading day:
+      - Prefer the earliest open-market trade date (buy_trade_date / sell_trade_date) when present.
+      - Otherwise fall back to event_trade_date.
+      - Use the first trading day on/after that anchor date.
+
     Lookbacks: 20/60 pre-returns; 52w distances using trailing 252 trading days; SMA-50/200.
     """
     ev = conn.execute(
         """
-        SELECT issuer_cik, event_trade_date FROM insider_events
+        SELECT issuer_cik, event_trade_date, has_buy, has_sell, buy_trade_date, sell_trade_date
+        FROM insider_events
         WHERE issuer_cik=? AND owner_key=? AND accession_number=?
         """,
         (event_key.issuer_cik, event_key.owner_key, event_key.accession_number),
@@ -27,7 +32,20 @@ def compute_trend_for_event(conn: Any, event_key: EventKey) -> None:
     if ev is None:
         raise RuntimeError(f"Event not found: {event_key}")
 
+    # Prefer the earliest open-market trade date when present. This avoids anchoring
+    # the trend on non-open-market rows (e.g., grants, exercises, withholding) that
+    # may have earlier dates in the same filing.
     trade_date = ev["event_trade_date"]
+    try:
+        open_mkt_dates: List[str] = []
+        if int(ev.get("has_buy") or 0) == 1 and ev.get("buy_trade_date"):
+            open_mkt_dates.append(str(ev["buy_trade_date"]))
+        if int(ev.get("has_sell") or 0) == 1 and ev.get("sell_trade_date"):
+            open_mkt_dates.append(str(ev["sell_trade_date"]))
+        if open_mkt_dates:
+            trade_date = min(open_mkt_dates)
+    except Exception:
+        pass
     if not trade_date:
         _set_trend_missing(conn, event_key, reason="missing_event_trade_date")
         return

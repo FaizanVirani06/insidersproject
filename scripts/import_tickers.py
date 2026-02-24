@@ -24,7 +24,7 @@ if str(ROOT) not in sys.path:
 
 
 from insider_platform.config import Config
-from insider_platform.db import connect, init_db
+from insider_platform.db import connect, init_db, upsert_app_config
 from insider_platform.sec.tickers import fetch_sec_company_tickers, resolve_ticker_to_cik10
 from insider_platform.util.time import utcnow_iso
 
@@ -67,8 +67,7 @@ def main() -> None:
     ticker_map = fetch_sec_company_tickers(cfg.SEC_USER_AGENT)
     now = utcnow_iso()
 
-    inserted = 0
-    updated = 0
+    upserted = 0
     missing: list[str] = []
 
     with connect(cfg.DB_DSN) as conn:
@@ -92,34 +91,14 @@ def main() -> None:
                 """,
                 (rec.cik10, rec.ticker, now, rec.title),
             )
-            # DB driver rowcount can vary (insert vs update); best-effort counts:
-            if cur.lastrowid:
-                inserted += 1
-            else:
-                updated += 1
+            # PostgreSQL rowcount is 1 for both insert and update in this upsert pattern.
+            # We track total upserts rather than trying to split inserted vs updated.
+            upserted += 1
 
         # Store a marker so admins can confirm imports happened.
-        # NOTE: some DBs have app_config(key,value) only; newer schema may add updated_at.
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(app_config)").fetchall()]
-        if "updated_at" in cols:
-            conn.execute(
-                """
-                INSERT INTO app_config(key,value,updated_at)
-                VALUES (?,?,?)
-                ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
-                """,
-                ("tickers_imported_at_utc", now, now),
-            )
-        else:
-            conn.execute(
-                """
-                INSERT INTO app_config(key,value)
-                VALUES (?,?)
-                ON CONFLICT(key) DO UPDATE SET value=excluded.value
-                """,
-                ("tickers_imported_at_utc", now),
-            )
-    print(f"Done. inserted_or_updated={inserted+updated} missing={len(missing)}")
+        upsert_app_config(conn, "tickers_imported_at_utc", now)
+
+    print(f"Done. upserted={upserted} missing={len(missing)}")
     if missing:
         print("Missing tickers (not found in SEC map), first 50:")
         for t in missing[:50]:

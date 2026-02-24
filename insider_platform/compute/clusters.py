@@ -110,6 +110,14 @@ def _compute_side_clusters(conn: Any, cfg: Config, ticker: str, side: str) -> No
             i += 1
             continue
 
+        # Guardrail: require that clustered activity spans at least 2 distinct filings.
+        # Some filings can list multiple reporting owners (beneficial ownership / trusts),
+        # which can otherwise create false "clusters" that are really a single event.
+        accessions = {candidates_sorted[k].accession_number for k in idxs}
+        if len(accessions) < 2:
+            i += 1
+            continue
+
         window_start = candidates_sorted[i].trade_date
         window_end = max(candidates_sorted[k].trade_date for k in idxs)
 

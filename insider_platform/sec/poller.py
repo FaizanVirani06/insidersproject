@@ -99,12 +99,20 @@ def poll_sec_current_form4_and_enqueue(conn, cfg: Config) -> Dict[str, Any]:
         if exists:
             continue
 
+        # IMPORTANT: Poller-discovered filings are "new" by definition. We only request AI
+        # generation for these new filings to avoid expensive AI calls during backfills/reparses.
         enqueue_job(
             conn,
             job_type="FETCH_ACCESSION_DOCS",
             dedupe_key=f"FETCH|{accession}",
-            payload={"accession_number": accession, "issuer_cik_hint": issuer_cik10},
-            priority=1,
+            payload={
+                "accession_number": accession,
+                "issuer_cik_hint": issuer_cik10,
+                "ingest_source": "poller",
+                "ai_requested": True,
+            },
+            # Higher priority so new filings are processed ahead of large historical backfills.
+            priority=100,
             requeue_if_exists=False,
         )
         enqueued += 1

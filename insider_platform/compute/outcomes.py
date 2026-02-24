@@ -16,7 +16,13 @@ def _debug(msg: str) -> None:
 def compute_outcomes_for_event(conn: Any, cfg: Config, event_key: EventKey) -> None:
     """Compute +60/+180 trading-day forward returns for buy and sell sides.
 
-    outcomes_v2 adds a benchmark series (default: SPY.US) so we can compute:
+    **Anchor convention (tradeable):**
+    - We anchor on the first trading day on/after the *filing_date* (not the transaction date).
+      This makes outcomes representative of what a user could have traded after the filing became public.
+    - We store p0 as the issuer's adjusted close on that anchor date. This keeps the return series
+      internally consistent (important around splits, dividends, etc.).
+
+    outcomes_v3 adds a benchmark series (default: SPY.US) so we can compute:
       excess_return = trade_return - benchmark_return
 
     Benchmark returns use the SAME sign convention as the trade side:
@@ -25,7 +31,10 @@ def compute_outcomes_for_event(conn: Any, cfg: Config, event_key: EventKey) -> N
     """
     ev = conn.execute(
         """
-        SELECT issuer_cik, buy_trade_date, sell_trade_date, buy_vwap_price, sell_vwap_price, has_buy, has_sell
+        SELECT issuer_cik, filing_date,
+               buy_trade_date, sell_trade_date,
+               buy_vwap_price, sell_vwap_price,
+               has_buy, has_sell
         FROM insider_events
         WHERE issuer_cik=? AND owner_key=? AND accession_number=?
         """,
@@ -67,7 +76,7 @@ def compute_outcomes_for_event(conn: Any, cfg: Config, event_key: EventKey) -> N
                 event_key,
                 side="buy",
                 trade_date=ev["buy_trade_date"],
-                p0=ev["buy_vwap_price"],
+                p0=None,
                 reason="missing_price_series",
                 bench_symbol=bench_symbol,
                 bench_missing_reason="missing_benchmark_series" if not bench_series else None,
@@ -79,7 +88,7 @@ def compute_outcomes_for_event(conn: Any, cfg: Config, event_key: EventKey) -> N
                 event_key,
                 side="sell",
                 trade_date=ev["sell_trade_date"],
-                p0=ev["sell_vwap_price"],
+                p0=None,
                 reason="missing_price_series",
                 bench_symbol=bench_symbol,
                 bench_missing_reason="missing_benchmark_series" if not bench_series else None,
@@ -94,7 +103,7 @@ def compute_outcomes_for_event(conn: Any, cfg: Config, event_key: EventKey) -> N
             event_key,
             side="buy",
             trade_date=ev["buy_trade_date"],
-            p0=ev["buy_vwap_price"],
+            filing_date=ev["filing_date"],
             dates=issuer_dates,
             closes=issuer_closes,
             bench_symbol=bench_symbol,
@@ -111,7 +120,7 @@ def compute_outcomes_for_event(conn: Any, cfg: Config, event_key: EventKey) -> N
             event_key,
             side="sell",
             trade_date=ev["sell_trade_date"],
-            p0=ev["sell_vwap_price"],
+            filing_date=ev["filing_date"],
             dates=issuer_dates,
             closes=issuer_closes,
             bench_symbol=bench_symbol,
@@ -163,7 +172,7 @@ def _compute_side(
     event_key: EventKey,
     side: str,
     trade_date: Any,
-    p0: Any,
+    filing_date: Any,
     dates: List[str],
     closes: List[float],
     bench_symbol: str,
@@ -177,29 +186,17 @@ def _compute_side(
             event_key,
             side=side,
             trade_date=None,
-            p0=p0,
+            p0=None,
             reason="missing_trade_date",
             bench_symbol=bench_symbol,
             bench_missing_reason="missing_benchmark_series" if not bench_dates else None,
         )
         return
 
-    if not isinstance(p0, (int, float)) or float(p0) <= 0:
-        _upsert_missing(
-            conn,
-            cfg,
-            event_key,
-            side=side,
-            trade_date=trade_date,
-            p0=p0,
-            reason="missing_or_bad_p0",
-            bench_symbol=bench_symbol,
-            bench_missing_reason="missing_benchmark_series" if not bench_dates else None,
-        )
-        return
-
-    # anchor index = first trading day on/after trade_date (issuer series)
-    i = _find_anchor_index(dates, trade_date)
+    # Anchor index = first trading day on/after filing_date (tradeable),
+    # falling back to trade_date when filing_date is missing.
+    anchor_source_date = filing_date or trade_date
+    i = _find_anchor_index(dates, anchor_source_date)
     if i is None:
         _upsert_missing(
             conn,
@@ -207,7 +204,7 @@ def _compute_side(
             event_key,
             side=side,
             trade_date=trade_date,
-            p0=p0,
+            p0=None,
             reason="anchor_not_found",
             bench_symbol=bench_symbol,
             bench_missing_reason="missing_benchmark_series" if not bench_dates else None,
@@ -215,7 +212,20 @@ def _compute_side(
         return
 
     anchor_date = dates[i]
-    p0f = float(p0)
+    p0f = float(closes[i])
+    if p0f <= 0:
+        _upsert_missing(
+            conn,
+            cfg,
+            event_key,
+            side=side,
+            trade_date=trade_date,
+            p0=None,
+            reason="bad_anchor_price",
+            bench_symbol=bench_symbol,
+            bench_missing_reason="missing_benchmark_series" if not bench_dates else None,
+        )
+        return
 
     # Trade-side forward returns (issuer)
     out = {
@@ -265,7 +275,7 @@ def _compute_side(
         bench_reason_60 = "missing_benchmark_series"
         bench_reason_180 = "missing_benchmark_series"
     else:
-        bi = _find_anchor_index(bench_dates, trade_date)
+        bi = _find_anchor_index(bench_dates, anchor_source_date)
         if bi is None:
             bench_reason_60 = "benchmark_anchor_not_found"
             bench_reason_180 = "benchmark_anchor_not_found"

@@ -87,16 +87,20 @@ class Config:
     )
 
     # Versions (bump when behavior changes)
-    CURRENT_PARSE_VERSION: str = os.environ.get("CURRENT_PARSE_VERSION", "form4_parse_v1.1")
+    # v1.2: event_trade_date now prefers earliest open-market date (improves trend/outcomes anchoring)
+    CURRENT_PARSE_VERSION: str = os.environ.get("CURRENT_PARSE_VERSION", "form4_parse_v1.2")
     OWNER_NORM_VERSION: str = os.environ.get("OWNER_NORM_VERSION", "owner_norm_v1")
-    CURRENT_CLUSTER_VERSION: str = os.environ.get("CURRENT_CLUSTER_VERSION", "cluster_v1")
-    CURRENT_TREND_VERSION: str = os.environ.get("CURRENT_TREND_VERSION", "trend_v1")
-    CURRENT_OUTCOMES_VERSION: str = os.environ.get("CURRENT_OUTCOMES_VERSION", "outcomes_v2")
+    # v2: require >=2 distinct filings in a cluster window (reduces false positives from multi-owner filings)
+    CURRENT_CLUSTER_VERSION: str = os.environ.get("CURRENT_CLUSTER_VERSION", "cluster_v2")
+    # v2: trend anchoring prefers earliest open-market date when present
+    CURRENT_TREND_VERSION: str = os.environ.get("CURRENT_TREND_VERSION", "trend_v2")
+    # v3: outcomes anchor on filing_date (tradeable) and use adjusted-close p0 (split-safe)
+    CURRENT_OUTCOMES_VERSION: str = os.environ.get("CURRENT_OUTCOMES_VERSION", "outcomes_v3")
     CURRENT_STATS_VERSION: str = os.environ.get("CURRENT_STATS_VERSION", "stats_v2")
 
     AI_INPUT_SCHEMA_VERSION: str = os.environ.get("AI_INPUT_SCHEMA_VERSION", "ai_input_v2")
     AI_OUTPUT_SCHEMA_VERSION: str = os.environ.get("AI_OUTPUT_SCHEMA_VERSION", "ai_output_v1")
-    PROMPT_VERSION: str = os.environ.get("PROMPT_VERSION", "prompt_ai_v3")
+    PROMPT_VERSION: str = os.environ.get("PROMPT_VERSION", "prompt_ai_v4")
 
     # Benchmark (excess returns) - used for insider performance stats
     BENCHMARK_SYMBOL: str = os.environ.get("BENCHMARK_SYMBOL", "SPY.US")  # S&P500 proxy

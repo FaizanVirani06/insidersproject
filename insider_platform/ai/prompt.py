@@ -66,6 +66,19 @@ BENCHMARK NOTE:
 - insider_stats.*avg_return_* and win rates are computed on **excess returns** (trade_return - benchmark_return).
 - The benchmark symbol is provided in $.benchmark.symbol (default: SPY.US).
 
+TRADEABILITY / FILING DELAY:
+- Use $.event.buy.filing_delay_days / $.event.sell.filing_delay_days as staleness + tradeability context.
+  Larger delays generally reduce confidence because market participants could have learned the info later.
+
+FOOTNOTE INTENT FLAGS:
+- $.filing_context.indicators contains heuristic flags derived from filing footnotes.
+  If indicators suggest a 10b5-1 plan / trading plan / tax-withholding / sell-to-cover, treat SELL signals
+  as more ambiguous and reduce confidence (and optionally rating) unless other evidence is unusually strong.
+
+SELL SIGNALS (IMPORTANT):
+- Sells are generally noisier than buys. Require stronger evidence (size, holdings %, clustering, role)
+  to justify high sell ratings. Do not overreact to small trims.
+
 
 SUMMARY LENGTH GUIDANCE:
 - Aim for <= 240 characters for buy_signal.summary / sell_signal.summary.
@@ -100,7 +113,7 @@ OUTPUT STRUCTURE (ai_output_v1):
 {
   "schema_version": "ai_output_v1",
   "model_id": "<string>",
-  "prompt_version": "prompt_ai_v3",
+  "prompt_version": "prompt_ai_v4",
   "generated_at_utc": "<ISO UTC ending with Z>",
   "event_key": {"issuer_cik":"...","owner_key":"...","accession_number":"..."},
   "verdict": {
