@@ -248,6 +248,11 @@ def _detect_footnote_indicators(footnotes: List[str]) -> Dict[str, Any]:
     """Heuristic flags derived from filing footnotes.
 
     These are intentionally conservative and used as *weak priors*.
+
+    Notes:
+      - We avoid flagging on the bare word "tax" alone (too many false positives).
+      - Instead we look for common phrases that explicitly indicate sell-to-cover /
+        withholding mechanics, net settlement, or plan language.
     """
     text = " ".join([f for f in footnotes if isinstance(f, str)]).lower()
 
@@ -255,20 +260,20 @@ def _detect_footnote_indicators(footnotes: List[str]) -> Dict[str, Any]:
     mentions_10b5_1 = bool(re.search(r"10b5\s*[-‑–—]?\s*1", text)) or ("rule 10b5" in text)
     mentions_trading_plan = ("trading plan" in text) or ("pre-arranged" in text) or ("prearranged" in text)
 
-    # Common mechanical-sale language (tax / withholding / sell-to-cover).
-    mentions_tax_or_withholding = any(
-        k in text
-        for k in (
-            "tax",
-            "withhold",
-            "withholding",
-            "sell to cover",
-            "sell-to-cover",
-            "to cover",
-            "to satisfy",
-            "covering",
-        )
-    )
+    # Common mechanical-sale language (tax / withholding / sell-to-cover / net settlement).
+    tax_patterns = [
+        r"tax\s+withhold",
+        r"withhold(?:ing)?\s+(?:of\s+)?tax",
+        r"withholding\s+oblig",
+        r"sell[-\s]?to[-\s]?cover",
+        r"to\s+cover\s+(?:tax|withhold)",
+        r"cover\s+(?:the\s+)?tax",
+        r"to\s+satisfy\s+(?:tax|withhold)",
+        r"net\s+settle",
+        r"net[-\s]?settlement",
+        r"sell\s+shares\s+to\s+cover",  # explicit phrase sometimes used
+    ]
+    mentions_tax_or_withholding = any(bool(re.search(p, text)) for p in tax_patterns)
 
     # A combined flag that is most relevant for interpreting sells.
     plan_or_mechanical_sale_possible = bool(mentions_10b5_1 or mentions_trading_plan or mentions_tax_or_withholding)
@@ -619,6 +624,10 @@ def run_ai_for_event(conn: Any, cfg: Config, event_key: EventKey, *, force: bool
         ai_output = ai_output2
         raw_text = repaired_text
 
+    # Post-process / calibrate the model output so stored ratings match our UX scale.
+    # This avoids extra model calls (repairs) while keeping ratings stable over time.
+    _postprocess_ai_output(ai_output, ai_input)
+
     buy_rating = ai_output["verdict"]["buy_signal"].get("rating")
     sell_rating = ai_output["verdict"]["sell_signal"].get("rating")
     # Store a single confidence as max of both, else null
@@ -898,6 +907,12 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
 
     This is meant to *stabilize* the rating/confidence across models and prompt tweaks.
     The model should use this as an anchor rather than guessing from scratch.
+
+    Calibration intent (important):
+      - 5–6 is a "typical/okay" signal.
+      - 7+ should require multiple independent positives (size, role, clustering, rarity).
+      - Mechanical/plan-driven sells (tax withholding, sell-to-cover, net settlement, 10b5-1)
+        should generally be below typical (often 2–5).
     """
 
     event = ai_input.get("event") or {}
@@ -912,6 +927,7 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
     footnote_indicators = (filing_context.get("indicators") or {}) if isinstance(filing_context, dict) else {}
     plan_or_mech = bool(footnote_indicators.get("plan_or_mechanical_sale_possible"))
     mentions_10b5_1 = bool(footnote_indicators.get("mentions_10b5_1"))
+    mentions_trading_plan = bool(footnote_indicators.get("mentions_trading_plan"))
     mentions_tax = bool(footnote_indicators.get("mentions_tax_or_withholding"))
 
     bucket = issuer_context.get("market_cap_bucket")
@@ -942,77 +958,81 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
             return 0.03
         return 0.0
 
-
     def _bucket_adj(b: Any) -> float:
+        # Keep these small; bucket is a weak prior.
         b = (str(b).strip().lower() if b is not None else "")
         if b == "micro":
-            return 0.7
+            return 0.5
         if b == "small":
-            return 0.4
+            return 0.3
         if b == "mid":
-            return 0.2
+            return 0.1
         if b == "mega":
-            return -0.3
+            return -0.4
         # large -> 0.0 (neutral)
         return 0.0
 
     def _role_adj(title: Any) -> float:
+        # Keep role effects moderate; role is supportive context, not the whole story.
         if _is_ceo(title):
-            return 0.6
+            return 0.5
         if _is_exec(title):
-            return 0.3
+            return 0.25
         return 0.0
 
     def _pct_base(pct: Optional[float], *, is_buy: bool) -> float:
         """Base rating from % change in holdings.
 
         pct is already a percentage (e.g. 190.0 means +190%).
-        We intentionally score sells more conservatively than buys: discretionary intent is
-        less clear for many sells (diversification, taxes, plans, compensation).
         """
         if is_buy:
+            # BUY side: most signals should land ~5–7 before other adjustments.
             if pct is None:
-                return 5.6
+                return 5.0
             if pct >= 200:
-                return 9.5
-            if pct >= 100:
                 return 9.0
+            if pct >= 100:
+                return 8.4
             if pct >= 50:
-                return 8.5
+                return 7.7
             if pct >= 25:
-                return 8.0
-            if pct >= 10:
-                return 7.5
-            if pct >= 5:
                 return 7.0
+            if pct >= 10:
+                return 6.4
+            if pct >= 5:
+                return 5.9
             if pct >= 2:
-                return 6.5
+                return 5.3
             if pct >= 1:
-                return 5.8
-            return 5.2
+                return 5.1
+            return 4.7
 
-        # Sell side (more conservative mapping)
+        # SELL side: inherently noisier; keep the mapping more conservative.
         if pct is None:
-            return 5.0
+            return 4.8
         if pct >= 200:
-            return 8.7
-        if pct >= 100:
             return 8.2
-        if pct >= 50:
+        if pct >= 100:
             return 7.6
-        if pct >= 25:
+        if pct >= 50:
             return 7.0
+        if pct >= 25:
+            return 6.4
         if pct >= 10:
-            return 6.3
+            return 5.9
         if pct >= 5:
-            return 5.8
-        if pct >= 2:
             return 5.4
+        if pct >= 2:
+            return 5.0
         if pct >= 1:
-            return 5.1
-        return 4.8
+            return 4.8
+        return 4.4
 
     def _trade_size_adj(dollars: Any, pct_mcap: Any) -> float:
+        """Trade size adjustment.
+
+        Prefer % of market cap when available; else fall back to absolute dollars.
+        """
         # Prefer % of market cap if we have it.
         try:
             pct_mcap_f = float(pct_mcap) if pct_mcap is not None else None
@@ -1020,17 +1040,17 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
             pct_mcap_f = None
         if pct_mcap_f is not None:
             if pct_mcap_f >= 1.0:
-                return 1.0
+                return 0.8
             if pct_mcap_f >= 0.5:
-                return 0.7
+                return 0.55
             if pct_mcap_f >= 0.1:
-                return 0.4
+                return 0.35
             if pct_mcap_f >= 0.05:
-                return 0.2
+                return 0.18
             if pct_mcap_f < 0.005:
-                return -0.4
+                return -0.45
             if pct_mcap_f < 0.02:
-                return -0.2
+                return -0.25
             return 0.0
 
         try:
@@ -1040,15 +1060,15 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
         if d is None:
             return 0.0
         if d >= 5_000_000:
-            return 0.7
+            return 0.6
         if d >= 1_000_000:
-            return 0.5
+            return 0.45
         if d >= 250_000:
-            return 0.3
+            return 0.25
         if d >= 100_000:
-            return 0.2
+            return 0.15
         if d < 25_000:
-            return -0.2
+            return -0.25
         return 0.0
 
     def _history_adj(prior_events_total: Any, trade_size_adj: float) -> float:
@@ -1062,18 +1082,18 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
         # Rarer events are more informative
         if n == 0:
             # First-ever events are only informative when the trade itself is not tiny.
-            return 0.35 if trade_size_adj >= 0.2 else 0.1
+            return 0.30 if trade_size_adj >= 0.2 else 0.10
         if n <= 2:
-            return 0.2
+            return 0.18
         if n <= 5:
-            return 0.1
+            return 0.08
         return 0.0
 
     def _cluster_adj(cluster_obj: Dict[str, Any]) -> float:
         try:
             if bool(cluster_obj.get("cluster_flag")):
                 # Clustered insider behavior is informative
-                return 0.4
+                return 0.35
         except Exception:
             pass
         return 0.0
@@ -1087,19 +1107,19 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
             r = float(ret_60)
             if is_buy:
                 if r <= -0.25:
-                    return 0.35
+                    return 0.30
                 if r <= -0.10:
-                    return 0.2
+                    return 0.18
                 if r >= 0.25:
-                    return -0.2
+                    return -0.18
                 return 0.0
             # sell side
             if r >= 0.25:
-                return 0.25
+                return 0.20
             if r >= 0.10:
-                return 0.15
+                return 0.12
             if r <= -0.25:
-                return -0.15
+                return -0.12
             return 0.0
         except Exception:
             return 0.0
@@ -1135,17 +1155,17 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
             dly_i = None
         if dly_i is not None:
             if dly_i >= 10:
-                buy_rating_f -= 0.25
+                buy_rating_f -= 0.30
             elif dly_i >= 3:
-                buy_rating_f -= 0.10
+                buy_rating_f -= 0.12
 
         buy_rating_f = _clamp(buy_rating_f, 1.0, 10.0)
         buy_rating = round(buy_rating_f, 1)
 
         # Confidence is primarily data-quality and strength driven
-        conf = 0.40
+        conf = 0.38
         if buy_pct_f is not None and buy_pct_f >= 50:
-            conf += 0.10
+            conf += 0.09
         if _is_ceo(title) or _is_cfo(title):
             conf += 0.05
         if bool((cluster_context.get("buy_cluster") or {}).get("cluster_flag")):
@@ -1187,9 +1207,19 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
 
         # Sell interpretation penalties (conservative by default)
         # - If footnotes suggest a 10b5-1 / plan / tax-withholding / sell-to-cover, intent is ambiguous.
-        if plan_or_mech:
-            sell_rating_f -= 0.90
-            sell_reasons.append("possible_plan_or_withholding")
+        #   These should typically score BELOW "okay" unless other evidence is unusually strong.
+        if mentions_tax:
+            sell_rating_f -= 2.3
+            sell_reasons.append("tax_withholding_or_sell_to_cover")
+            sell_rating_f = min(sell_rating_f, 4.5)  # hard cap
+        elif mentions_10b5_1 or mentions_trading_plan:
+            sell_rating_f -= 1.5
+            sell_reasons.append("10b5_1_or_trading_plan")
+            sell_rating_f = min(sell_rating_f, 5.8)
+        elif plan_or_mech:
+            sell_rating_f -= 1.0
+            sell_reasons.append("possible_plan_or_mechanical_sale")
+            sell_rating_f = min(sell_rating_f, 6.2)
 
         # Filing delay penalty (tradeability / staleness)
         try:
@@ -1199,9 +1229,9 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
             sdly_i = None
         if sdly_i is not None:
             if sdly_i >= 10:
-                sell_rating_f -= 0.35
+                sell_rating_f -= 0.40
             elif sdly_i >= 3:
-                sell_rating_f -= 0.15
+                sell_rating_f -= 0.18
 
         # Extra conservatism for small trims without clustering.
         try:
@@ -1210,13 +1240,13 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
             is_cluster = False
         if not is_cluster:
             if (sell_pct_f is not None and sell_pct_f < 10) and sell_trade_size_adj < 0.2:
-                sell_rating_f -= 0.50
+                sell_rating_f -= 0.65
                 sell_reasons.append("small_trim_ambiguous")
 
         sell_rating_f = _clamp(sell_rating_f, 1.0, 10.0)
         sell_rating = round(sell_rating_f, 1)
 
-        conf = 0.32
+        conf = 0.28
         if sell_pct_f is not None and sell_pct_f >= 25:
             conf += 0.08
         if _is_ceo(title) or _is_cfo(title):
@@ -1227,8 +1257,18 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
             conf -= 0.07
         if data_quality.get("trend_missing"):
             conf -= 0.05
-        if plan_or_mech:
+
+        # Confidence penalties for ambiguous intent
+        if mentions_tax:
+            conf -= 0.22
+            conf = min(conf, 0.45)
+        elif mentions_10b5_1 or mentions_trading_plan:
+            conf -= 0.15
+            conf = min(conf, 0.55)
+        elif plan_or_mech:
             conf -= 0.12
+            conf = min(conf, 0.60)
+
         if sdly_i is not None:
             if sdly_i >= 10:
                 conf -= 0.10
@@ -1249,3 +1289,115 @@ def _compute_baseline_signals(ai_input: Dict[str, Any]) -> Dict[str, Any]:
             "reasons": sell_reasons,
         },
     }
+
+
+def _postprocess_ai_output(ai_output: Dict[str, Any], ai_input: Dict[str, Any]) -> None:
+    """Deterministically calibrate model outputs.
+
+    Why:
+      - We want the UX rating distribution to be stable and centered so that:
+          * "okay" ≈ 5–6
+          * 7+ is meaningfully strong
+          * mechanical/plan sells are clearly lower
+      - We do this *after* schema validation to avoid extra repair calls (API usage).
+
+    This function mutates `ai_output` in-place.
+    """
+    if not isinstance(ai_output, dict) or not isinstance(ai_input, dict):
+        return
+
+    verdict = ai_output.get("verdict")
+    if not isinstance(verdict, dict):
+        return
+
+    baseline = ai_input.get("baseline") or {}
+    if not isinstance(baseline, dict):
+        baseline = {}
+
+    filing_context = ai_input.get("filing_context") or {}
+    indicators = (filing_context.get("indicators") or {}) if isinstance(filing_context, dict) else {}
+
+    mentions_tax = bool(indicators.get("mentions_tax_or_withholding"))
+    mentions_10b5_1 = bool(indicators.get("mentions_10b5_1"))
+    mentions_trading_plan = bool(indicators.get("mentions_trading_plan"))
+    plan_or_mech = bool(indicators.get("plan_or_mechanical_sale_possible"))
+
+    # Clamp policy:
+    # - Let the model downgrade more than it upgrades (prevents score inflation).
+    # - Be more restrictive on SELL upgrades than BUY upgrades.
+    max_down_rating = 2.5
+    max_up_rating_buy = 1.6
+    max_up_rating_sell = 1.3
+
+    max_down_conf = 0.25
+    max_up_conf = 0.20
+
+    def _as_float(x: Any) -> Optional[float]:
+        try:
+            if x is None or isinstance(x, bool):
+                return None
+            return float(x)
+        except Exception:
+            return None
+
+    def _set_one_decimal(x: float) -> float:
+        # Ensure schema-like 1 decimal place.
+        return float(f"{x:.1f}")
+
+    def _calibrate_signal(side: str) -> None:
+        sig_key = f"{side}_signal"
+        sig = verdict.get(sig_key)
+        if not isinstance(sig, dict):
+            return
+
+        status = str(sig.get("status") or "").strip().lower()
+        if status != "applicable":
+            return
+
+        base = baseline.get(side)
+        if not isinstance(base, dict):
+            base = {}
+
+        b_rating = _as_float(base.get("rating"))
+        b_conf = _as_float(base.get("confidence"))
+
+        rating = _as_float(sig.get("rating"))
+        conf = _as_float(sig.get("confidence"))
+
+        # Rating clamp around baseline
+        if rating is not None and b_rating is not None:
+            lo = b_rating - max_down_rating
+            hi = b_rating + (max_up_rating_buy if side == "buy" else max_up_rating_sell)
+
+            # Additional hard caps for ambiguous SELL intent.
+            if side == "sell":
+                if mentions_tax:
+                    hi = min(hi, 4.5)
+                elif mentions_10b5_1 or mentions_trading_plan:
+                    hi = min(hi, 5.8)
+                elif plan_or_mech:
+                    hi = min(hi, 6.2)
+
+            rating2 = _clamp(rating, max(1.0, lo), min(10.0, hi))
+            sig["rating"] = _set_one_decimal(rating2)
+
+        # Confidence clamp around baseline
+        if conf is not None and b_conf is not None:
+            clo = b_conf - max_down_conf
+            chi = b_conf + max_up_conf
+
+            if side == "sell":
+                if mentions_tax:
+                    chi = min(chi, 0.45)
+                elif mentions_10b5_1 or mentions_trading_plan:
+                    chi = min(chi, 0.55)
+                elif plan_or_mech:
+                    chi = min(chi, 0.60)
+
+            conf2 = _clamp(conf, max(0.0, clo), min(1.0, chi))
+            # Confidence doesn't require 1-decimal; keep 2dp for stability/readability.
+            sig["confidence"] = round(float(conf2), 2)
+
+    _calibrate_signal("buy")
+    _calibrate_signal("sell")
+

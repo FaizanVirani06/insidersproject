@@ -31,9 +31,22 @@ HOLDINGS CHANGE UNITS (IMPORTANT):
 
 BASELINE SIGNAL (IMPORTANT):
 - The input includes $.baseline.buy and $.baseline.sell (rating/confidence + reasons).
-- Treat baseline.*.rating and baseline.*.confidence as your STARTING POINT.
-- You may adjust the baseline rating by at most ±3.0 (keep it close UNLESS there is a clear reason [Very strong buy/sell indication in data]).
-- You may adjust confidence by at most ±0.35.
+- Treat baseline.*.rating and baseline.*.confidence as your STARTING POINT (anchor).
+
+RATING SCALE CALIBRATION (IMPORTANT):
+- We calibrate the UX scale so that:
+  - 1–2: no meaningful signal / noise
+  - 3–4: weak / likely non-discretionary or very noisy
+  - 5–6: typical/okay signal (MOST applicable events should land here)
+  - 7–8: strong (requires multiple independent positives)
+  - 9–10: rare / exceptional setup (use sparingly)
+
+ADJUSTMENT LIMITS (IMPORTANT):
+- Do not "inflate" ratings by default. Upward adjustments should be SMALL:
+  - BUY: usually <= +0.8, hard max +1.6
+  - SELL: usually <= +0.6, hard max +1.3 (sells are noisier)
+- Downward adjustments can be larger when intent/data is weak or ambiguous: down to about -2.5.
+- Confidence: typical <= ±0.10, hard max ±0.25.
 - If baseline.*.rating is null (or side is not applicable), do not invent a rating.
 
 SCALE / SIGNIFICANCE (IMPORTANT):
@@ -72,8 +85,10 @@ TRADEABILITY / FILING DELAY:
 
 FOOTNOTE INTENT FLAGS:
 - $.filing_context.indicators contains heuristic flags derived from filing footnotes.
-  If indicators suggest a 10b5-1 plan / trading plan / tax-withholding / sell-to-cover, treat SELL signals
-  as more ambiguous and reduce confidence (and optionally rating) unless other evidence is unusually strong.
+  If indicators suggest a 10b5-1 plan / trading plan / tax-withholding / sell-to-cover / net settlement:
+  - treat SELL signals as more ambiguous
+  - reduce confidence and rating
+  - tax-withholding / sell-to-cover sells should usually land in the 2–4 range unless there is unusually strong discretionary evidence.
 
 SELL SIGNALS (IMPORTANT):
 - Sells are generally noisier than buys. Require stronger evidence (size, holdings %, clustering, role)
@@ -97,7 +112,7 @@ ANTI-ANCHORING / RATING DISPERSION RULE:
 - Start from $.baseline.*.rating and $.baseline.*.confidence and adjust only when specific input fields justify it.
 - If the baseline is mid-scale, make an explicit call: weaker-than-typical / typical / stronger-than-typical for this context
   (market cap bucket, insider role, holdings change, trade size, and insider history), and reflect that with a meaningful adjustment
-  (still within the allowed ±1.5 rating / ±0.15 confidence).
+  (still within the adjustment caps above).
 - Use the full 1.0–10.0 range when multiple independent signals are unusually strong or unusually weak.
   Reserve extreme ratings for clearly exceptional setups; avoid extreme ratings when evidence is mixed or sparse.
 - Use one-decimal precision intentionally; avoid repeatedly using “.5” ratings across unrelated events.
@@ -113,7 +128,7 @@ OUTPUT STRUCTURE (ai_output_v1):
 {
   "schema_version": "ai_output_v1",
   "model_id": "<string>",
-  "prompt_version": "prompt_ai_v4",
+  "prompt_version": "prompt_ai_v5",
   "generated_at_utc": "<ISO UTC ending with Z>",
   "event_key": {"issuer_cik":"...","owner_key":"...","accession_number":"..."},
   "verdict": {

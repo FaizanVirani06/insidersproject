@@ -100,7 +100,7 @@ class Config:
 
     AI_INPUT_SCHEMA_VERSION: str = os.environ.get("AI_INPUT_SCHEMA_VERSION", "ai_input_v2")
     AI_OUTPUT_SCHEMA_VERSION: str = os.environ.get("AI_OUTPUT_SCHEMA_VERSION", "ai_output_v1")
-    PROMPT_VERSION: str = os.environ.get("PROMPT_VERSION", "prompt_ai_v4")
+    PROMPT_VERSION: str = os.environ.get("PROMPT_VERSION", "prompt_ai_v5")
 
     # Benchmark (excess returns) - used for insider performance stats
     BENCHMARK_SYMBOL: str = os.environ.get("BENCHMARK_SYMBOL", "SPY.US")  # S&P500 proxy
