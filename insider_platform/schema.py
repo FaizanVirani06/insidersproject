@@ -94,6 +94,9 @@ CREATE TABLE IF NOT EXISTS issuer_master (
     issuer_name TEXT,
     last_filing_date TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_issuer_master_current_ticker ON issuer_master (current_ticker);
+CREATE INDEX IF NOT EXISTS idx_issuer_master_last_filing_date ON issuer_master (last_filing_date);
+
 
 CREATE TABLE IF NOT EXISTS filings (
     accession_number TEXT PRIMARY KEY,

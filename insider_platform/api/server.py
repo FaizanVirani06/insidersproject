@@ -820,67 +820,161 @@ def admin_support_reply(
 
 @app.get("/tickers")
 def list_tickers(
-    limit: int = Query(200, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0, le=200000),
     q: Optional[str] = None,
+    sort_by: str = Query("last_filing_desc"),
+    include_total: bool = Query(False),
     user: Dict[str, Any] = Depends(require_subscription),
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """List issuers (tickers) with summary stats.
 
-    NOTE: issuer_master.last_filing_date can be stale. We compute last filing date
-    from filings when possible.
+    Pagination:
+      - `limit` + `offset` (offset-based)
+      - returns `next_offset` and `prev_offset`
+
+    Design notes:
+      - We page at the DB layer for scalability (do not fetch thousands of tickers into the SPA).
+      - Search uses ILIKE (case-insensitive) across ticker, issuer name, CIK, and sector.
+      - Counts are computed only for the tickers on the current page.
+
+    NOTE: This endpoint relies on issuer_master.last_filing_date for ordering.
+    The ingest pipeline updates this field as new filings arrive.
     """
 
     qn = (q or "").strip()
     like = f"%{qn}%" if qn else None
 
+    sort_by = (sort_by or "last_filing_desc").strip().lower()
+    if sort_by not in ("last_filing_desc", "ticker_asc", "sector_asc"):
+        raise HTTPException(status_code=400, detail="invalid_sort_by")
+
+    # Fetch one extra row to determine if there is a next page.
+    page_limit = int(limit) + 1
+
+    # Build ORDER BY used in both base and final SELECT.
+    if sort_by == "ticker_asc":
+        order_base = "ORDER BY im.current_ticker ASC NULLS LAST, im.issuer_cik ASC"
+        order_final = "ORDER BY b.current_ticker ASC NULLS LAST, b.issuer_cik ASC"
+    elif sort_by == "sector_asc":
+        order_base = (
+            "ORDER BY f.sector ASC NULLS LAST, im.last_filing_date DESC NULLS LAST, im.current_ticker ASC, im.issuer_cik ASC"
+        )
+        order_final = (
+            "ORDER BY b.sector ASC NULLS LAST, b.last_filing_date DESC NULLS LAST, b.current_ticker ASC, b.issuer_cik ASC"
+        )
+    else:
+        order_base = "ORDER BY im.last_filing_date DESC NULLS LAST, im.current_ticker ASC, im.issuer_cik ASC"
+        order_final = "ORDER BY b.last_filing_date DESC NULLS LAST, b.current_ticker ASC, b.issuer_cik ASC"
+
     with connect(cfg.DB_DSN) as conn:
-        sql = """
-        SELECT
-            im.issuer_cik,
-            im.current_ticker,
-            im.issuer_name,
-            COALESCE(
-                (SELECT MAX(f.filing_date) FROM filings f WHERE f.issuer_cik = im.issuer_cik),
-                im.last_filing_date
-            ) AS last_filing_date,
-            (
-                SELECT COUNT(*)
-                FROM insider_events e
-                WHERE e.issuer_cik = im.issuer_cik
-                  AND (e.has_buy=1 OR e.has_sell=1)
-            ) AS open_market_event_count,
-            (
-                SELECT COUNT(*)
-                FROM insider_events e
-                WHERE e.issuer_cik = im.issuer_cik
-                  AND (e.ai_buy_rating IS NOT NULL OR e.ai_sell_rating IS NOT NULL OR e.ai_confidence IS NOT NULL)
-            ) AS ai_event_count,
-            (
-                SELECT COUNT(*)
-                FROM clusters c
-                WHERE c.ticker = im.current_ticker
-            ) AS cluster_event_count,
-            m.market_cap,
-            m.market_cap_bucket,
-            m.market_cap_updated_at,
-            f.sector,
-            f.beta
-        FROM issuer_master im
-        LEFT JOIN market_cap_cache m ON m.ticker = im.current_ticker
-        LEFT JOIN issuer_fundamentals_cache f ON f.ticker = im.current_ticker
-        WHERE im.current_ticker IS NOT NULL
+        total_count: Optional[int] = None
+        total_pages: Optional[int] = None
+
+        # Optional total count (for "Page X of Y" UI). We keep this behind a flag because
+        # COUNT(*) can be expensive if requested on every page on very large universes.
+        if include_total:
+            count_sql = """
+            SELECT COUNT(*)::bigint AS total_count
+            FROM issuer_master im
+            LEFT JOIN issuer_fundamentals_cache f ON f.ticker = im.current_ticker
+            WHERE im.current_ticker IS NOT NULL
+            """
+            count_params: List[Any] = []
+            if like is not None:
+                count_sql += " AND (im.current_ticker ILIKE ? OR im.issuer_name ILIKE ? OR im.issuer_cik ILIKE ? OR f.sector ILIKE ?)"
+                count_params.extend([like, like, like, like])
+
+            r = conn.execute(count_sql, tuple(count_params)).fetchone()
+            try:
+                total_count = int((r or {}).get("total_count") or 0)
+            except Exception:
+                total_count = 0
+
+            # Avoid importing math; compute ceil(total_count / limit).
+            total_pages = (total_count + int(limit) - 1) // int(limit) if int(limit) > 0 else 0
+        sql = f"""
+        WITH base AS (
+            SELECT
+                im.issuer_cik,
+                im.current_ticker,
+                im.issuer_name,
+                im.last_filing_date,
+                f.sector,
+                f.beta
+            FROM issuer_master im
+            LEFT JOIN issuer_fundamentals_cache f ON f.ticker = im.current_ticker
+            WHERE im.current_ticker IS NOT NULL
         """
         params: List[Any] = []
 
         if like is not None:
-            sql += " AND (im.current_ticker LIKE ? OR im.issuer_name LIKE ? OR im.issuer_cik LIKE ?)"
-            params.extend([like, like, like])
+            sql += " AND (im.current_ticker ILIKE ? OR im.issuer_name ILIKE ? OR im.issuer_cik ILIKE ? OR f.sector ILIKE ?)"
+            params.extend([like, like, like, like])
 
-        sql += " ORDER BY (last_filing_date IS NULL) ASC, last_filing_date DESC LIMIT ?"
-        params.append(limit)
+        sql += f"""
+            {order_base}
+            LIMIT ? OFFSET ?
+        ),
+        event_counts AS (
+            SELECT
+                e.issuer_cik,
+                COUNT(*) FILTER (WHERE (e.has_buy=1 OR e.has_sell=1)) AS open_market_event_count,
+                COUNT(*) FILTER (WHERE (e.ai_buy_rating IS NOT NULL OR e.ai_sell_rating IS NOT NULL OR e.ai_confidence IS NOT NULL)) AS ai_event_count
+            FROM insider_events e
+            WHERE e.issuer_cik IN (SELECT issuer_cik FROM base)
+            GROUP BY e.issuer_cik
+        ),
+        cluster_counts AS (
+            SELECT
+                c.ticker,
+                COUNT(*) AS cluster_event_count
+            FROM clusters c
+            WHERE c.ticker IN (SELECT current_ticker FROM base)
+            GROUP BY c.ticker
+        )
+        SELECT
+            b.issuer_cik,
+            b.current_ticker,
+            b.issuer_name,
+            b.last_filing_date,
+            COALESCE(ec.open_market_event_count, 0) AS open_market_event_count,
+            COALESCE(ec.ai_event_count, 0) AS ai_event_count,
+            COALESCE(cc.cluster_event_count, 0) AS cluster_event_count,
+            m.market_cap,
+            m.market_cap_bucket,
+            m.market_cap_updated_at,
+            b.sector,
+            b.beta
+        FROM base b
+        LEFT JOIN event_counts ec ON ec.issuer_cik = b.issuer_cik
+        LEFT JOIN cluster_counts cc ON cc.ticker = b.current_ticker
+        LEFT JOIN market_cap_cache m ON m.ticker = b.current_ticker
+        {order_final}
+        """
 
+        params.extend([page_limit, offset])
         rows = conn.execute(sql, tuple(params)).fetchall()
-        return [dict(r) for r in rows]
+
+        tickers = [dict(r) for r in rows]
+        has_next = len(tickers) > limit
+        if has_next:
+            tickers = tickers[:limit]
+
+        next_offset = offset + limit if has_next else None
+        prev_offset = max(offset - limit, 0) if offset > 0 else None
+
+        return {
+            "q": qn or None,
+            "sort_by": sort_by,
+            "offset": offset,
+            "limit": limit,
+            "next_offset": next_offset,
+            "prev_offset": prev_offset,
+            "total_count": total_count,
+            "total_pages": total_pages,
+            "tickers": tickers,
+        }
 
 
 # -----------------------------
