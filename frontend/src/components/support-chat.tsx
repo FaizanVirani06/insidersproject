@@ -113,7 +113,7 @@ export function SupportChatWidget() {
   }, [open, messages.length]);
 
   // Hide the widget on admin pages to reduce clutter.
-  const hide = location.pathname.startsWith("/admin");
+  const hide = location.pathname.startsWith("/app/admin");
   if (hide) return null;
 
   return (

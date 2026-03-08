@@ -268,8 +268,6 @@ def _migrate(conn: Any) -> None:
     # --- users: billing / subscription columns (Stripe) ---
     if _table_exists(conn, "users") and _has_column(conn, "users", "user_id"):
         user_cols_to_add = [
-            ("terms_accepted_at", "TEXT"),
-            ("terms_accepted_version", "TEXT"),
             ("stripe_customer_id", "TEXT"),
             ("stripe_subscription_id", "TEXT"),
             ("stripe_price_id", "TEXT"),

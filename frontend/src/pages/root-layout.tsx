@@ -7,14 +7,14 @@ import { SupportChatWidget } from "@/components/support-chat";
 
 export function RootLayout() {
   const location = useLocation();
-  const isWide = location.pathname.startsWith("/app") || location.pathname.startsWith("/admin");
+  const isApp = location.pathname.startsWith("/app");
 
   return (
     <div className="relative min-h-screen text-foreground">
       <AnimatedBackground />
       <TopNav />
 
-      <main className={isWide ? "mx-auto w-full max-w-screen-2xl px-4 py-8" : "container mx-auto px-4 py-10"}>
+      <main className={isApp ? "mx-auto w-full max-w-screen-2xl px-4 py-8" : "container mx-auto px-4 py-10"}>
         <Outlet />
       </main>
 
@@ -22,12 +22,11 @@ export function RootLayout() {
       <SupportChatWidget />
 
       <footer className="border-t border-zinc-200/70 bg-white/40 backdrop-blur-xl dark:border-zinc-800/50 dark:bg-black/30">
-        <div className="container mx-auto px-4 py-6">
-          <div className="flex items-center justify-center gap-4 text-sm text-zinc-500 dark:text-zinc-500">
-            <p>© {new Date().getFullYear()} InsidrsAI</p>
-            <span aria-hidden>•</span>
-            <Link to="/legal" className="hover:text-purple-600 dark:hover:text-purple-300 transition-colors">
-              Privacy &amp; Terms
+        <div className="container mx-auto flex flex-col gap-2 px-4 py-6 text-sm sm:flex-row sm:items-center sm:justify-between">
+          <div className="muted">© {new Date().getFullYear()} InsidrsAI</div>
+          <div className="flex items-center gap-4">
+            <Link to="/legal" className="link">
+              Legal
             </Link>
           </div>
         </div>

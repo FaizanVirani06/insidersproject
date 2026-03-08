@@ -27,10 +27,6 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TEXT NOT NULL,
     last_login_at TEXT,
 
-    -- Legal / consent
-    terms_accepted_at TEXT,
-    terms_accepted_version TEXT,
-
     -- Billing / subscription (Stripe)
     stripe_customer_id TEXT,
     stripe_subscription_id TEXT,
@@ -43,21 +39,6 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_role_active ON users (role, is_active);
 CREATE INDEX IF NOT EXISTS idx_users_stripe_customer ON users (stripe_customer_id);
 CREATE INDEX IF NOT EXISTS idx_users_subscription_status ON users (subscription_status, is_active);
-
--- User profile / preferences
--- Stores customer preferences for recommendations + basic contact fields.
--- We keep preferences as JSON text for flexibility as the product evolves.
-CREATE TABLE IF NOT EXISTS user_profiles (
-    user_id BIGINT PRIMARY KEY,
-    full_name TEXT,
-    contact_email TEXT,
-    contact_phone TEXT,
-    preferences_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(user_id)
-);
-CREATE INDEX IF NOT EXISTS idx_user_profiles_updated ON user_profiles (updated_at);
 
 -- Feedback (customers)
 CREATE TABLE IF NOT EXISTS user_feedback (

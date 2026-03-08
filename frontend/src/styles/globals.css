@@ -24,30 +24,6 @@
   body {
     @apply bg-background text-foreground;
   }
-
-  /* Floating background orb animation (used by <AnimatedBackground />) */
-  @keyframes orb-float {
-    0% {
-      transform: translate(0, 0) scale(1);
-      opacity: 0;
-    }
-    25% {
-      transform: translate(var(--dx1), var(--dy1)) scale(1.2);
-      opacity: 0.15;
-    }
-    50% {
-      transform: translate(var(--dx2), var(--dy2)) scale(0.85);
-      opacity: 0.2;
-    }
-    75% {
-      transform: translate(var(--dx3), var(--dy3)) scale(1.05);
-      opacity: 0.15;
-    }
-    100% {
-      transform: translate(0, 0) scale(1);
-      opacity: 0;
-    }
-  }
 }
 
 /*
@@ -59,27 +35,6 @@
   .glass-card {
     @apply rounded-xl border border-zinc-200/70 bg-white/60 shadow-sm backdrop-blur-xl;
     @apply dark:border-zinc-800/60 dark:bg-black/40;
-  }
-
-  /* Minimal typography helpers (we're not using the Tailwind typography plugin). */
-  .prose h2 {
-    @apply mt-10 text-xl font-semibold;
-  }
-
-  .prose h3 {
-    @apply mt-8 text-lg font-semibold;
-  }
-
-  .prose p {
-    @apply mt-3 text-sm leading-relaxed text-zinc-700 dark:text-zinc-200;
-  }
-
-  .prose ul {
-    @apply mt-3 list-disc space-y-2 pl-5 text-sm text-zinc-700 dark:text-zinc-200;
-  }
-
-  .prose strong {
-    @apply font-semibold text-zinc-900 dark:text-white;
   }
 
   .glass-panel {

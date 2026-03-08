@@ -4,8 +4,7 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 
 import type { EventDetail, InsiderEventRow } from "@/lib/types";
-import { fmtDate, fmtDollars, fmtNumber, fmtPercent } from "@/lib/format";
-import { fmtConfidence10, fmtScore10 } from "@/lib/score";
+import { fmtAiRating, fmtDate, fmtDollars, fmtNumber, fmtPercent } from "@/lib/format";
 import { apiFetch } from "@/lib/api";
 
 function Badge({ children }: { children: React.ReactNode }) {
@@ -31,22 +30,11 @@ function SideBadge({ side }: { side: "buy" | "sell" }) {
   );
 }
 
-function Rating({ label, rating, confidence }: { label: string; rating?: number | null; confidence?: number | null }) {
-  if (rating === null || rating === undefined) {
-    return (
-      <div className="text-xs text-black/50 dark:text-white/50">
-        {label}: —
-      </div>
-    );
-  }
-  return (
-    <div className="text-xs">
-      <span className="font-medium">{label}:</span> {fmtScore10(rating)}
-      {confidence !== null && confidence !== undefined && (
-        <span className="text-black/50 dark:text-white/50"> • conf {fmtConfidence10(confidence)}</span>
-      )}
-    </div>
-  );
+function fmtConfidencePct(c?: number | null): string {
+  if (c === null || c === undefined || Number.isNaN(c)) return "—";
+  const x = Math.round(Number(c) * 100);
+  if (!Number.isFinite(x)) return "—";
+  return `${x}%`;
 }
 
 function pickAiSummary(detail: EventDetail): { side: "buy" | "sell"; status: string; rating: number | null; confidence: number | null; summary: string | null } | null {
@@ -114,13 +102,40 @@ export function EventCard({ event }: { event: InsiderEventRow }) {
 
   const aiSummary = detail ? pickAiSummary(detail) : null;
 
+  const buyRating = typeof event.ai_buy_rating === "number" ? (event.ai_buy_rating as number) : null;
+  const sellRating = typeof event.ai_sell_rating === "number" ? (event.ai_sell_rating as number) : null;
+  const bestRating = typeof (event as any).best_ai_rating === "number" ? ((event as any).best_ai_rating as number) : Math.max(buyRating ?? -1, sellRating ?? -1);
+  const bestRatingDisplay = bestRating >= 0 ? fmtAiRating(bestRating) : "—";
+  const bestSide = (() => {
+    if (buyRating === null && sellRating === null) {
+      if (hasBuy && !hasSell) return "BUY";
+      if (hasSell && !hasBuy) return "SELL";
+      return "—";
+    }
+    if (buyRating !== null && (sellRating === null || buyRating >= sellRating)) return "BUY";
+    return "SELL";
+  })();
+
   return (
-    <div className="glass-card p-4 transition hover:-translate-y-0.5 hover:shadow-md">
-      <button type="button" onClick={toggle} className="w-full text-left">
-        <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="group relative overflow-hidden rounded-lg border border-zinc-200/70 bg-white/60 p-6 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:bg-white/80 hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900/50 dark:hover:border-zinc-700 dark:hover:bg-zinc-900/80">
+      {/* Gradient glow on hover */}
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-purple-500/10 to-cyan-500/10 opacity-0 transition-opacity group-hover:opacity-100" />
+
+      <button type="button" onClick={toggle} className="relative w-full text-left">
+        {/* Header */}
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <div className="truncate text-base font-semibold">
+              {(event.ticker || (event as any).issuer_name) && (
+                <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                  {event.ticker ? <span className="font-semibold text-zinc-700 dark:text-zinc-200">{String(event.ticker)}</span> : null}
+                  {(event as any).issuer_name ? <span className="ml-2 truncate">{String((event as any).issuer_name)}</span> : null}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <div className="truncate text-lg font-semibold text-zinc-900 dark:text-white">
                 {event.owner_name_display || event.owner_key}
               </div>
 
@@ -131,33 +146,47 @@ export function EventCard({ event }: { event: InsiderEventRow }) {
               {Number(event.cluster_flag_sell ?? 0) === 1 && <Badge>Cluster Sell</Badge>}
             </div>
 
-            <div className="mt-1 text-sm text-black/60 dark:text-white/60">
+            <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
               {event.owner_title || "—"}
               <span className="mx-2">•</span>
-              Filing: {fmtDate(event.filing_date)}
+              Filed {fmtDate(event.filing_date)}
               {event.event_trade_date && (
                 <>
                   <span className="mx-2">•</span>
-                  Trade: {fmtDate(event.event_trade_date)}
+                  Trade {fmtDate(event.event_trade_date)}
                 </>
               )}
             </div>
           </div>
 
+          {/* Right-side highlight metric */}
           <div className="shrink-0 text-right">
-            <div className="text-sm font-medium">
-              {hasBuy && <span>{fmtDollars(event.buy_dollars_total ?? null)}</span>}
-              {hasBuy && hasSell && <span className="text-black/40 dark:text-white/40"> / </span>}
-              {hasSell && <span>{fmtDollars(event.sell_dollars_total ?? null)}</span>}
+            <div className="text-xs text-zinc-500 dark:text-zinc-400">AI score</div>
+            <div className="mt-1 text-2xl font-semibold text-purple-600 dark:text-purple-400">
+              {bestRatingDisplay}
+              {bestSide !== "—" ? <span className="ml-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">{bestSide}</span> : null}
             </div>
-            <div className="mt-1 space-y-0.5">
-              <Rating label="AI buy" rating={event.ai_buy_rating} confidence={event.ai_confidence} />
-              <Rating label="AI sell" rating={event.ai_sell_rating} confidence={event.ai_confidence} />
-            </div>
+            <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Conf {fmtConfidencePct(event.ai_confidence)}</div>
           </div>
         </div>
 
-        <div className="mt-3 text-xs text-black/50 dark:text-white/50">
+        {/* Stats */}
+        <div className="mt-4 grid grid-cols-3 gap-3">
+          <div className="text-center">
+            <div className="text-sm font-semibold text-zinc-900 dark:text-white">{fmtDollars(event.buy_dollars_total ?? null)}</div>
+            <div className="text-xs text-zinc-500 dark:text-zinc-500">Buy $</div>
+          </div>
+          <div className="text-center">
+            <div className="text-sm font-semibold text-zinc-900 dark:text-white">{fmtDollars(event.sell_dollars_total ?? null)}</div>
+            <div className="text-xs text-zinc-500 dark:text-zinc-500">Sell $</div>
+          </div>
+          <div className="text-center">
+            <div className="text-sm font-semibold text-zinc-900 dark:text-white">{bestRatingDisplay}</div>
+            <div className="text-xs text-zinc-500 dark:text-zinc-500">AI score</div>
+          </div>
+        </div>
+
+        <div className="mt-4 text-xs text-zinc-500 dark:text-zinc-500">
           Click to {open ? "collapse" : "expand"} details
         </div>
       </button>
@@ -175,12 +204,12 @@ export function EventCard({ event }: { event: InsiderEventRow }) {
           {detail && (
             <div className="space-y-4">
               {/* AI summary */}
-              <div className="rounded-lg border bg-black/5 p-3 dark:bg-white/5">
+              <div className="rounded-lg border border-zinc-200/70 bg-white/50 p-3 backdrop-blur-sm dark:border-zinc-800 dark:bg-black/20">
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-sm font-semibold">AI summary</div>
                   {aiSummary && (
                     <div className="text-xs text-black/60 dark:text-white/60">
-                      {aiSummary.side.toUpperCase()} • rating {fmtNumber(aiSummary.rating, { digits: 1 })} • conf {fmtNumber(aiSummary.confidence, { digits: 2 })}
+                      {aiSummary.side.toUpperCase()} • score {fmtAiRating(aiSummary.rating)} • conf {fmtConfidencePct(aiSummary.confidence)}
                     </div>
                   )}
                 </div>

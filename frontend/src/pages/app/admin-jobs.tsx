@@ -57,7 +57,7 @@ export function AdminJobsPage() {
           <h1 className="text-2xl font-semibold">Jobs</h1>
           <p className="mt-1 text-sm muted">
             Raw job rows (latest first). For aggregate health, use{" "}
-            <Link className="link" to="/admin/monitoring">
+            <Link className="link" to="/app/admin/monitoring">
               Monitoring
             </Link>
             .

@@ -5,8 +5,7 @@ import { Link } from "react-router-dom";
 import { useParams } from "react-router-dom";
 
 import type { EventDetail, PricePoint } from "@/lib/types";
-import { addDays, fmtDate, fmtDollars, fmtNumber, fmtPercent, minIsoDate } from "@/lib/format";
-import { fmtConfidence10, fmtScore10 } from "@/lib/score";
+import { addDays, fmtAiRating, fmtDate, fmtDollars, fmtNumber, fmtPercent, minIsoDate } from "@/lib/format";
 import { PriceChart } from "@/components/price-chart";
 import { RegenerateAIButton } from "@/components/regenerate-ai-button";
 import { apiFetch } from "@/lib/api";
@@ -88,6 +87,12 @@ export function EventDetailPage() {
   const tradePlan = (detail as any).trade_plan as any | null | undefined;
   const tradePlanEligible = Boolean(tradePlan && tradePlan.eligible);
 
+  const confPct = (c?: number | null) => {
+    if (c === null || c === undefined || Number.isNaN(c)) return "—";
+    const x = Math.round(Number(c) * 100);
+    return Number.isFinite(x) ? `${x}%` : "—";
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-3">
@@ -144,12 +149,12 @@ export function EventDetailPage() {
           <div className="text-xs muted">AI rating</div>
           <div className="mt-2 text-sm">
             <div>
-              <span className="muted">Buy</span> {fmtScore10(e.ai_buy_rating ?? null)}
+              <span className="muted">Buy</span> {fmtAiRating(e.ai_buy_rating ?? null)}
             </div>
             <div>
-              <span className="muted">Sell</span> {fmtScore10(e.ai_sell_rating ?? null)}
+              <span className="muted">Sell</span> {fmtAiRating(e.ai_sell_rating ?? null)}
             </div>
-            <div className="mt-1 text-xs muted">Conf {fmtConfidence10(e.ai_confidence ?? null)}</div>
+            <div className="mt-1 text-xs muted">Conf {confPct(e.ai_confidence ?? null)}</div>
           </div>
         </div>
 
@@ -266,8 +271,8 @@ export function EventDetailPage() {
                 Status: <span className="font-medium">{String(verdict.buy_signal?.status ?? "—")}</span>
               </div>
               <div className="mt-1 text-sm">
-                Rating: <span className="font-medium">{fmtNumber(verdict.buy_signal?.rating ?? null, { digits: 1 })}</span>
-                <span className="muted"> • conf {fmtNumber(verdict.buy_signal?.confidence ?? null, { digits: 2 })}</span>
+                Score: <span className="font-medium">{fmtAiRating(verdict.buy_signal?.rating ?? null)}</span>
+                <span className="muted"> • conf {confPct(verdict.buy_signal?.confidence ?? null)}</span>
               </div>
               <div className="mt-2 text-sm">
                 {verdict.buy_signal?.summary || "—"}
@@ -280,8 +285,8 @@ export function EventDetailPage() {
                 Status: <span className="font-medium">{String(verdict.sell_signal?.status ?? "—")}</span>
               </div>
               <div className="mt-1 text-sm">
-                Rating: <span className="font-medium">{fmtNumber(verdict.sell_signal?.rating ?? null, { digits: 1 })}</span>
-                <span className="muted"> • conf {fmtNumber(verdict.sell_signal?.confidence ?? null, { digits: 2 })}</span>
+                Score: <span className="font-medium">{fmtAiRating(verdict.sell_signal?.rating ?? null)}</span>
+                <span className="muted"> • conf {confPct(verdict.sell_signal?.confidence ?? null)}</span>
               </div>
               <div className="mt-2 text-sm">
                 {verdict.sell_signal?.summary || "—"}

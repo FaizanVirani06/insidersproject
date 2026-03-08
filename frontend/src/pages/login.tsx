@@ -42,7 +42,7 @@ export function LoginPage() {
       if (next) {
         navigate(next, { replace: true });
       } else if (isPaid) {
-        navigate("/app", { replace: true });
+        navigate("/app/tickers", { replace: true });
       } else {
         navigate("/pricing", { replace: true });
       }

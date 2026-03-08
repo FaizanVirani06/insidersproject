@@ -183,7 +183,11 @@ export function PricingPage() {
             </ul>
 
             <div className="mt-6 text-xs muted">
-              By subscribing you agree to our Privacy Policy and Terms of Service (see Legal in the footer).
+              By subscribing you agree to our{" "}
+              <Link to="/legal" className="link">
+                Privacy + Terms
+              </Link>
+              .
             </div>
           </div>
         </div>
