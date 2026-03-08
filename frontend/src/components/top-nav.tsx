@@ -33,7 +33,7 @@ function NavLink({
 export function TopNav() {
   const { user, logout } = useAuth();
   const loc = useLocation();
-  const isApp = loc.pathname.startsWith("/app");
+  const isWide = loc.pathname.startsWith("/app") || loc.pathname.startsWith("/admin");
 
   const isPaid = Boolean(user && (user.role === "admin" || user.is_paid));
 
@@ -41,7 +41,7 @@ export function TopNav() {
     <header className="sticky top-0 z-50 border-b border-zinc-200/70 bg-white/50 backdrop-blur-xl dark:border-zinc-800/50 dark:bg-black/40">
       <div
         className={
-          isApp
+          isWide
             ? "mx-auto flex h-16 max-w-screen-2xl items-center justify-between px-4"
             : "container mx-auto flex h-16 items-center justify-between px-4"
         }
@@ -57,7 +57,6 @@ export function TopNav() {
 
         <nav className="hidden items-center gap-6 text-sm md:flex">
           <NavLink to="/pricing">Pricing</NavLink>
-          <NavLink to="/legal">Legal</NavLink>
           <NavLink to="/app" exact={false}>
             App
           </NavLink>
@@ -69,7 +68,7 @@ export function TopNav() {
           {user ? (
             <>
               {user.role === "admin" ? (
-                <Link to="/app/admin/monitoring" className="btn-secondary hidden sm:inline-flex">
+                <Link to="/admin" className="btn-secondary hidden sm:inline-flex">
                   Admin
                 </Link>
               ) : null}

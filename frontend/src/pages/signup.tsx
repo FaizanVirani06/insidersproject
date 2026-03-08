@@ -14,6 +14,7 @@ export function SignupPage() {
   const [confirm, setConfirm] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
+  const [acceptedTerms, setAcceptedTerms] = React.useState(false);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -33,12 +34,17 @@ export function SignupPage() {
       return;
     }
 
+    if (!acceptedTerms) {
+      setError("You must agree to the Privacy Policy and Terms to create an account.");
+      return;
+    }
+
     setLoading(true);
     try {
       const res = await apiFetch("/auth/register", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ username: u, password }),
+        body: JSON.stringify({ username: u, password, accepted_terms: acceptedTerms }),
       });
 
       if (!res.ok) {
@@ -57,7 +63,7 @@ export function SignupPage() {
       if (next) {
         navigate(next, { replace: true });
       } else if (isPaid) {
-        navigate("/app/tickers", { replace: true });
+        navigate("/app", { replace: true });
       } else {
         navigate("/pricing", { replace: true });
       }
@@ -108,6 +114,23 @@ export function SignupPage() {
               autoComplete="new-password"
             />
           </div>
+
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={acceptedTerms}
+              onChange={(e) => setAcceptedTerms(e.target.checked)}
+              required
+            />
+            <span className="muted">
+              I agree to the{" "}
+              <a className="link" href="/legal" target="_blank" rel="noreferrer">
+                Privacy Policy and Terms of Service
+              </a>
+              .
+            </span>
+          </label>
 
           {error && (
             <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300">

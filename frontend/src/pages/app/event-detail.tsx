@@ -6,6 +6,7 @@ import { useParams } from "react-router-dom";
 
 import type { EventDetail, PricePoint } from "@/lib/types";
 import { addDays, fmtDate, fmtDollars, fmtNumber, fmtPercent, minIsoDate } from "@/lib/format";
+import { fmtConfidence10, fmtScore10 } from "@/lib/score";
 import { PriceChart } from "@/components/price-chart";
 import { RegenerateAIButton } from "@/components/regenerate-ai-button";
 import { apiFetch } from "@/lib/api";
@@ -143,12 +144,12 @@ export function EventDetailPage() {
           <div className="text-xs muted">AI rating</div>
           <div className="mt-2 text-sm">
             <div>
-              <span className="muted">Buy</span> {fmtNumber(e.ai_buy_rating ?? null, { digits: 1 })}
+              <span className="muted">Buy</span> {fmtScore10(e.ai_buy_rating ?? null)}
             </div>
             <div>
-              <span className="muted">Sell</span> {fmtNumber(e.ai_sell_rating ?? null, { digits: 1 })}
+              <span className="muted">Sell</span> {fmtScore10(e.ai_sell_rating ?? null)}
             </div>
-            <div className="mt-1 text-xs muted">Conf {fmtNumber(e.ai_confidence ?? null, { digits: 2 })}</div>
+            <div className="mt-1 text-xs muted">Conf {fmtConfidence10(e.ai_confidence ?? null)}</div>
           </div>
         </div>
 

@@ -6,6 +6,7 @@ import { Link } from "react-router-dom";
 import type { InsiderEventRow } from "@/lib/types";
 import { fmtDate, fmtDollars } from "@/lib/format";
 import { apiFetch } from "@/lib/api";
+import { fmtScore10 } from "@/lib/score";
 
 type EventsResponse = {
   days?: number;
@@ -184,7 +185,7 @@ export function EventsPage() {
                 const ticker = String((e as any).ticker || "");
                 // The backend historically used -1 as a sentinel for "no AI rating".
                 // Treat any negative score as "not available" for display.
-                const bestDisplay = typeof best === "number" && best >= 0 ? best.toFixed(1) : "—";
+                const bestDisplay = typeof best === "number" && best >= 0 ? fmtScore10(best) : "—";
 
                 return (
                   <tr

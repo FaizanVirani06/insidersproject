@@ -7,14 +7,14 @@ import { SupportChatWidget } from "@/components/support-chat";
 
 export function RootLayout() {
   const location = useLocation();
-  const isApp = location.pathname.startsWith("/app");
+  const isWide = location.pathname.startsWith("/app") || location.pathname.startsWith("/admin");
 
   return (
     <div className="relative min-h-screen text-foreground">
       <AnimatedBackground />
       <TopNav />
 
-      <main className={isApp ? "mx-auto w-full max-w-screen-2xl px-4 py-8" : "container mx-auto px-4 py-10"}>
+      <main className={isWide ? "mx-auto w-full max-w-screen-2xl px-4 py-8" : "container mx-auto px-4 py-10"}>
         <Outlet />
       </main>
 

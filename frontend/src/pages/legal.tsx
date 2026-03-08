@@ -1,135 +1,301 @@
-import { Link } from "react-router-dom";
+import * as React from "react";
+
+function TocLink({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <a className="link" href={href}>
+      {children}
+    </a>
+  );
+}
 
 export function LegalPage() {
   return (
-    <div className="mx-auto max-w-3xl py-8 sm:py-12">
-      {/* Back button */}
-      <Link
-        to="/"
-        className="inline-flex items-center gap-2 text-sm text-zinc-600 transition-colors hover:text-purple-600 dark:text-zinc-400 dark:hover:text-purple-300"
-      >
-        <span aria-hidden className="text-base leading-none">
-          ←
-        </span>
-        Back to home
-      </Link>
-
-      {/* Header */}
-      <div className="mt-8">
-        <h1 className="text-4xl font-semibold tracking-tight">Privacy &amp; Terms</h1>
-        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Last updated: March 3, 2026</p>
+    <div className="mx-auto max-w-4xl">
+      <div className="flex flex-col gap-2">
+        <h1 className="text-3xl font-semibold">Legal</h1>
+        <p className="text-sm muted">
+          Last updated: <span className="font-medium">March 8, 2026</span>
+        </p>
+        <p className="text-sm muted">
+          This page contains our Terms of Service, Privacy Policy, and key risk disclosures. If you do not agree, do not
+          use the Services.
+        </p>
       </div>
 
-      {/* Content container */}
-      <div className="mt-10 rounded-2xl border border-zinc-200/70 bg-white/70 p-6 backdrop-blur-sm shadow-sm dark:border-zinc-800/60 dark:bg-black/30 sm:p-8">
-        <div className="space-y-10">
-          {/* Privacy Policy */}
-          <section className="space-y-4">
-            <h2 className="text-2xl font-semibold">Privacy Policy</h2>
+      <div className="glass-card mt-6 p-6">
+        <h2 className="text-lg font-semibold">Table of contents</h2>
+        <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm">
+          <li>
+            <TocLink href="#definitions">Definitions</TocLink>
+          </li>
+          <li>
+            <TocLink href="#risk">Important risk disclosures</TocLink>
+          </li>
+          <li>
+            <TocLink href="#terms">Terms of Service</TocLink>
+          </li>
+          <li>
+            <TocLink href="#privacy">Privacy Policy</TocLink>
+          </li>
+          <li>
+            <TocLink href="#cookies">Cookies and tracking</TocLink>
+          </li>
+          <li>
+            <TocLink href="#security">Security</TocLink>
+          </li>
+          <li>
+            <TocLink href="#rights">Your rights and choices</TocLink>
+          </li>
+          <li>
+            <TocLink href="#contact">Contact</TocLink>
+          </li>
+        </ol>
+      </div>
 
-            <div className="space-y-4 text-sm text-zinc-600 dark:text-zinc-400">
-              <div>
-                <h3 className="text-lg font-semibold text-zinc-900 dark:text-white">Information We Collect</h3>
-                <p className="mt-1">
-                  We collect information you provide when creating an account, including your email address and usage
-                  data. We use this information to provide and improve our services.
-                </p>
-              </div>
+      <div className="prose prose-zinc mt-8 max-w-none dark:prose-invert">
+        <h2 id="definitions">Definitions</h2>
+        <ul>
+          <li>
+            <strong>Company</strong>, <strong>we</strong>, <strong>us</strong>, or <strong>our</strong> refers to the
+            operator of this website and the SEC Form 4 Analyzer platform ("InsidrsAI").
+          </li>
+          <li>
+            <strong>Services</strong> means our websites, apps, APIs, dashboards, and related tools, including any
+            content, alerts, and recommendations presented through them.
+          </li>
+          <li>
+            <strong>User</strong>, <strong>you</strong>, or <strong>your</strong> means any person or entity accessing
+            the Services.
+          </li>
+          <li>
+            <strong>Content</strong> means text, graphics, data, filings, analytics, AI-generated summaries, ratings,
+            and any other information displayed by the Services.
+          </li>
+          <li>
+            <strong>SEC filings</strong> means publicly available filings from the U.S. Securities and Exchange
+            Commission (including Form 4).
+          </li>
+        </ul>
 
-              <div>
-                <h3 className="text-lg font-semibold text-zinc-900 dark:text-white">How We Use Your Information</h3>
-                <p className="mt-1">
-                  Your information is used to operate InsidrsAI, send you updates about insider trading activity, and
-                  improve our analysis features. We never sell your personal information to third parties.
-                </p>
-              </div>
+        <h2 id="risk">Important risk disclosures</h2>
+        <p>
+          <strong>No investment advice.</strong> The Services are provided for informational and educational purposes
+          only. Nothing on the Services constitutes financial, investment, legal, tax, or accounting advice. You are
+          solely responsible for your decisions.
+        </p>
+        <p>
+          <strong>AI and scoring limitations.</strong> Some Content (including ratings, summaries, and explanations) may
+          be generated or assisted by artificial intelligence. AI can be inaccurate, incomplete, outdated, or misleading.
+          Always verify information directly from authoritative sources (for example, the original SEC filings) before
+          acting.
+        </p>
+        <p>
+          <strong>Market risk.</strong> Trading securities involves substantial risk and you can lose some or all of your
+          investment. Past performance (including insider buying/selling) does not guarantee future results.
+        </p>
+        <p>
+          <strong>No guarantee of completeness or timeliness.</strong> While we aim to ingest and process SEC filings
+          promptly, delays and outages can occur. We do not guarantee that filings, alerts, or analytics will be complete,
+          accurate, or available at any time.
+        </p>
+        <p>
+          <strong>Not affiliated with the SEC.</strong> We are not endorsed by, affiliated with, or sponsored by the U.S.
+          Securities and Exchange Commission.
+        </p>
+        <p>
+          <strong>Compliance with law.</strong> You are responsible for complying with all applicable laws and regulations
+          (including securities laws). The Services do not encourage or facilitate illegal activity. We provide analysis
+          of public filings; we do not provide inside information.
+        </p>
 
-              <div>
-                <h3 className="text-lg font-semibold text-zinc-900 dark:text-white">Data Security</h3>
-                <p className="mt-1">
-                  We implement industry-standard security measures to protect your data. All data transmission is
-                  encrypted, and we regularly review our security practices.
-                </p>
-              </div>
+        <h2 id="terms">Terms of Service</h2>
+        <h3>1. Eligibility and account registration</h3>
+        <p>
+          You must provide accurate registration information and keep it updated. You are responsible for maintaining the
+          confidentiality of your credentials and for all activity under your account.
+        </p>
 
-              <div>
-                <h3 className="text-lg font-semibold text-zinc-900 dark:text-white">Cookies</h3>
-                <p className="mt-1">
-                  We use cookies to maintain your session and remember your preferences. You can disable cookies in your
-                  browser settings, though this may affect functionality.
-                </p>
-              </div>
-            </div>
-          </section>
+        <h3>2. Subscriptions, billing, and cancellations</h3>
+        <ul>
+          <li>
+            Some features require a paid subscription. Subscription details, pricing, and availability may change.
+          </li>
+          <li>
+            Payments may be processed by third-party providers (for example, Stripe). We do not store full payment card
+            details on our servers.
+          </li>
+          <li>
+            Unless otherwise stated, subscriptions renew automatically until canceled. You can manage billing through the
+            billing portal available in your account.
+          </li>
+          <li>
+            We may suspend or terminate access for non-payment, chargebacks, or suspected fraud.
+          </li>
+        </ul>
 
-          <div className="h-px bg-zinc-200/70 dark:bg-zinc-800/60" />
+        <h3>3. Acceptable use</h3>
+        <p>You agree not to:</p>
+        <ul>
+          <li>Use the Services in violation of any law or regulation.</li>
+          <li>Attempt to reverse engineer, scrape, or abuse the Services beyond normal use.</li>
+          <li>Interfere with or disrupt the integrity or performance of the Services.</li>
+          <li>Share, resell, or redistribute access to the Services unless explicitly permitted.</li>
+          <li>Upload malware or attempt to gain unauthorized access to accounts, systems, or networks.</li>
+        </ul>
 
-          {/* Terms of Service */}
-          <section className="space-y-4">
-            <h2 className="text-2xl font-semibold">Terms of Service</h2>
+        <h3>4. Intellectual property</h3>
+        <p>
+          The Services, including the design, branding, and proprietary software, are owned by us or our licensors.
+          Public-domain and publicly available government filings remain the property of their respective owners.
+        </p>
 
-            <div className="space-y-4 text-sm text-zinc-600 dark:text-zinc-400">
-              <div>
-                <h3 className="text-lg font-semibold text-zinc-900 dark:text-white">Service Description</h3>
-                <p className="mt-1">
-                  InsidrsAI provides analysis and tracking of publicly filed insider trading information. All data is
-                  sourced from SEC filings and public records.
-                </p>
-              </div>
+        <h3>5. Third-party services and links</h3>
+        <p>
+          The Services may include links to third-party websites or services. We are not responsible for third-party
+          content, policies, or practices.
+        </p>
 
-              <div>
-                <h3 className="text-lg font-semibold text-zinc-900 dark:text-white">Not Financial Advice</h3>
-                <p className="mt-1">
-                  InsidrsAI is an informational tool only. Nothing on this platform constitutes financial advice,
-                  investment recommendations, or solicitation to buy or sell securities. Always consult with a qualified
-                  financial advisor before making investment decisions.
-                </p>
-              </div>
+        <h3>6. Disclaimers</h3>
+        <p>
+          THE SERVICES ARE PROVIDED “AS IS” AND “AS AVAILABLE” WITHOUT WARRANTIES OF ANY KIND, EXPRESS OR IMPLIED,
+          INCLUDING IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+        </p>
 
-              <div>
-                <h3 className="text-lg font-semibold text-zinc-900 dark:text-white">Account Responsibilities</h3>
-                <p className="mt-1">
-                  You are responsible for maintaining the confidentiality of your account credentials and for all
-                  activities under your account. Notify us immediately of any unauthorized access.
-                </p>
-              </div>
+        <h3>7. Limitation of liability</h3>
+        <p>
+          TO THE MAXIMUM EXTENT PERMITTED BY LAW, WE WILL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL,
+          CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, OR FOR ANY LOSS OF PROFITS, REVENUE, DATA, OR GOODWILL, ARISING
+          OUT OF OR RELATED TO YOUR USE OF THE SERVICES.
+        </p>
 
-              <div>
-                <h3 className="text-lg font-semibold text-zinc-900 dark:text-white">Acceptable Use</h3>
-                <p className="mt-1">
-                  You agree not to misuse our services, including attempting to access unauthorized areas, interfering
-                  with the platform&apos;s operation, or using automated systems to scrape data.
-                </p>
-              </div>
+        <h3>8. Indemnification</h3>
+        <p>
+          You agree to indemnify and hold us harmless from any claims, liabilities, damages, losses, and expenses
+          (including reasonable attorneys’ fees) arising from your use of the Services or violation of these Terms.
+        </p>
 
-              <div>
-                <h3 className="text-lg font-semibold text-zinc-900 dark:text-white">Service Availability</h3>
-                <p className="mt-1">
-                  We strive to maintain high availability but do not guarantee uninterrupted access. We may modify or
-                  discontinue features with notice when possible.
-                </p>
-              </div>
+        <h3>9. Termination</h3>
+        <p>
+          We may suspend or terminate your account if you violate these Terms or if we reasonably believe your activity
+          presents a risk to the Services, other users, or third parties.
+        </p>
 
-              <div>
-                <h3 className="text-lg font-semibold text-zinc-900 dark:text-white">Limitation of Liability</h3>
-                <p className="mt-1">
-                  InsidrsAI is provided &quot;as is&quot; without warranties. We are not liable for any losses or damages arising
-                  from your use of the platform or reliance on the information provided.
-                </p>
-              </div>
-            </div>
-          </section>
+        <h3>10. Changes to the Services or Terms</h3>
+        <p>
+          We may update the Services and these Terms from time to time. Material changes will be communicated by updating
+          the “Last updated” date and, where appropriate, by additional notice. Continued use of the Services after
+          changes become effective constitutes acceptance.
+        </p>
 
-          <div className="h-px bg-zinc-200/70 dark:bg-zinc-800/60" />
+        <h3>11. Governing law</h3>
+        <p>
+          These Terms are governed by applicable laws in the jurisdiction where the Company is established, without
+          regard to conflict-of-law principles.
+        </p>
 
-          {/* Contact */}
-          <div className="text-sm text-zinc-600 dark:text-zinc-400">
-            Questions about our privacy practices or terms? Contact us at{" "}
-            <a href="mailto:legal@insidrsai.com" className="link">
-              legal@insidrsai.com
-            </a>
-            .
-          </div>
+        <h2 id="privacy">Privacy Policy</h2>
+        <h3>1. Information we collect</h3>
+        <ul>
+          <li>
+            <strong>Account information</strong> (e.g., email/username, password hash, and account role).
+          </li>
+          <li>
+            <strong>Profile information</strong> you provide (e.g., name, contact email, phone number, sector
+            preferences, and recommendation settings).
+          </li>
+          <li>
+            <strong>Usage information</strong> (e.g., pages viewed, features used, and diagnostic logs).
+          </li>
+          <li>
+            <strong>Support and feedback</strong> (messages you send to us, including attachments if applicable).
+          </li>
+          <li>
+            <strong>Billing information</strong> handled by payment processors; we may store billing identifiers (like
+            customer or subscription IDs) but not full payment card numbers.
+          </li>
+        </ul>
+
+        <h3>2. How we use information</h3>
+        <ul>
+          <li>Provide and improve the Services (including personalization and recommendations).</li>
+          <li>Process payments, manage subscriptions, and prevent fraud.</li>
+          <li>Provide customer support and respond to requests.</li>
+          <li>Maintain security, debug issues, and monitor service integrity.</li>
+          <li>Comply with legal obligations.</li>
+        </ul>
+
+        <h3>3. How we share information</h3>
+        <p>We may share information with:</p>
+        <ul>
+          <li>
+            <strong>Service providers</strong> (e.g., hosting, database, email, payment processors) who process data on
+            our behalf.
+          </li>
+          <li>
+            <strong>Legal and safety</strong> recipients when required to comply with law or protect rights and safety.
+          </li>
+          <li>
+            <strong>Business transfers</strong> in connection with a merger, acquisition, financing, or sale of assets.
+          </li>
+        </ul>
+        <p>We do not sell personal information in the ordinary course of business.</p>
+
+        <h3>4. Data retention</h3>
+        <p>
+          We retain personal information for as long as necessary to provide the Services, meet legal obligations,
+          resolve disputes, and enforce agreements. Retention periods vary by data type and context.
+        </p>
+
+        <h3>5. International transfers</h3>
+        <p>
+          If you access the Services from outside the United States, your information may be processed in the United
+          States or other jurisdictions where our providers operate.
+        </p>
+
+        <h3>6. Children’s privacy</h3>
+        <p>
+          The Services are not intended for children under 13 (or the minimum age required by applicable law). If you
+          believe a child has provided personal information, contact us so we can take appropriate action.
+        </p>
+
+        <h2 id="cookies">Cookies and tracking</h2>
+        <p>
+          We use cookies or similar technologies for essential functionality (like session management), security, and to
+          remember preferences. Depending on your configuration and usage, we may also use limited analytics to
+          understand service performance.
+        </p>
+
+        <h2 id="security">Security</h2>
+        <p>
+          We implement reasonable administrative, technical, and organizational measures designed to protect personal
+          information. However, no system is 100% secure, and we cannot guarantee absolute security.
+        </p>
+
+        <h2 id="rights">Your rights and choices</h2>
+        <p>
+          Depending on your location, you may have rights to access, correct, delete, or export your personal
+          information. You may also be able to object to or restrict certain processing.
+        </p>
+        <p>
+          To make a request, contact us using the information below. We may need to verify your identity before
+          fulfilling a request.
+        </p>
+
+        <h2 id="contact">Contact</h2>
+        <p>
+          For support or legal requests, contact us at <strong>support@insidrs.ai</strong>.
+        </p>
+      </div>
+
+      <div className="mt-8 glass-card p-6">
+        <div className="text-sm">
+          <div className="font-semibold">Plain-English summary (non-binding)</div>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm muted">
+            <li>This product is informational — not investment advice.</li>
+            <li>AI ratings can be wrong; verify against original SEC filings.</li>
+            <li>We store your account and preference settings to operate the service.</li>
+            <li>Legal changes may require you to re-accept updated terms.</li>
+          </ul>
         </div>
       </div>
     </div>

@@ -61,6 +61,27 @@
     @apply dark:border-zinc-800/60 dark:bg-black/40;
   }
 
+  /* Minimal typography helpers (we're not using the Tailwind typography plugin). */
+  .prose h2 {
+    @apply mt-10 text-xl font-semibold;
+  }
+
+  .prose h3 {
+    @apply mt-8 text-lg font-semibold;
+  }
+
+  .prose p {
+    @apply mt-3 text-sm leading-relaxed text-zinc-700 dark:text-zinc-200;
+  }
+
+  .prose ul {
+    @apply mt-3 list-disc space-y-2 pl-5 text-sm text-zinc-700 dark:text-zinc-200;
+  }
+
+  .prose strong {
+    @apply font-semibold text-zinc-900 dark:text-white;
+  }
+
   .glass-panel {
     @apply rounded-2xl border border-zinc-200/70 bg-white/60 shadow-sm backdrop-blur-xl;
     @apply dark:border-zinc-800/60 dark:bg-black/40;

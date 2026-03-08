@@ -5,6 +5,7 @@ import { Link } from "react-router-dom";
 
 import type { EventDetail, InsiderEventRow } from "@/lib/types";
 import { fmtDate, fmtDollars, fmtNumber, fmtPercent } from "@/lib/format";
+import { fmtConfidence10, fmtScore10 } from "@/lib/score";
 import { apiFetch } from "@/lib/api";
 
 function Badge({ children }: { children: React.ReactNode }) {
@@ -40,9 +41,9 @@ function Rating({ label, rating, confidence }: { label: string; rating?: number 
   }
   return (
     <div className="text-xs">
-      <span className="font-medium">{label}:</span> {fmtNumber(rating, { digits: 1 })}
+      <span className="font-medium">{label}:</span> {fmtScore10(rating)}
       {confidence !== null && confidence !== undefined && (
-        <span className="text-black/50 dark:text-white/50"> • conf {fmtNumber(confidence, { digits: 2 })}</span>
+        <span className="text-black/50 dark:text-white/50"> • conf {fmtConfidence10(confidence)}</span>
       )}
     </div>
   );

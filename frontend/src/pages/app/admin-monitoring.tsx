@@ -137,7 +137,7 @@ export function AdminMonitoringPage() {
           <h1 className="text-2xl font-semibold">Monitoring</h1>
           <p className="mt-1 text-sm muted">
             Aggregate pipeline health for admins. For raw rows, see{" "}
-            <Link className="link" to="/app/admin/jobs">
+            <Link className="link" to="/admin/jobs">
               Jobs
             </Link>
             .
@@ -364,7 +364,7 @@ export function AdminMonitoringPage() {
             <div className="text-sm font-semibold">Recent errors</div>
             <div className="text-xs muted">Latest jobs with status=error</div>
           </div>
-          <Link to="/app/admin/jobs" className="link text-xs">
+          <Link to="/admin/jobs" className="link text-xs">
             View in Jobs →
           </Link>
         </div>
