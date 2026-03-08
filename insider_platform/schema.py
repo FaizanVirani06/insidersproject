@@ -40,6 +40,19 @@ CREATE INDEX IF NOT EXISTS idx_users_role_active ON users (role, is_active);
 CREATE INDEX IF NOT EXISTS idx_users_stripe_customer ON users (stripe_customer_id);
 CREATE INDEX IF NOT EXISTS idx_users_subscription_status ON users (subscription_status, is_active);
 
+-- User profile + recommendation preferences
+CREATE TABLE IF NOT EXISTS user_profiles (
+    user_id BIGINT PRIMARY KEY,
+    full_name TEXT,
+    contact_email TEXT,
+    contact_phone TEXT,
+    preferences_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_contact_email ON user_profiles (contact_email);
+
 -- Feedback (customers)
 CREATE TABLE IF NOT EXISTS user_feedback (
     feedback_id BIGSERIAL PRIMARY KEY,

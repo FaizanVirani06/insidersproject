@@ -16,12 +16,33 @@ export type TickerRow = {
   last_filing_date?: string | null;
   open_market_event_count?: number;
   ai_event_count?: number;
+  best_event_ai_rating?: number | null;
   cluster_event_count?: number;
   market_cap?: number | null;
   market_cap_bucket?: string | null;
   market_cap_updated_at?: string | null;
   sector?: string | null;
   beta?: number | null;
+};
+
+export type UserProfilePreferences = {
+  preferred_sectors: string[];
+  min_ai_rating: number;
+  max_beta: number | null;
+  trade_side: "buy" | "sell" | "both";
+  email_alerts_enabled: boolean;
+  daily_digest_enabled: boolean;
+  [k: string]: any;
+};
+
+export type UserProfileRecord = {
+  user_id: number;
+  full_name: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
+  preferences: UserProfilePreferences;
+  created_at: string;
+  updated_at: string;
 };
 
 export type InsiderEventRow = Record<string, any> & {

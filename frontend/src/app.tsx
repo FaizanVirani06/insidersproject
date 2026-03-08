@@ -11,16 +11,19 @@ import { SignupPage } from "@/pages/signup";
 
 import { AppShell } from "@/pages/app/app-shell";
 import { AccountPage } from "@/pages/app/account";
-import { AdminJobsPage } from "@/pages/app/admin-jobs";
 import { AdminFeedbackPage } from "@/pages/app/admin-feedback";
+import { AdminJobsPage } from "@/pages/app/admin-jobs";
 import { AdminMonitoringPage } from "@/pages/app/admin-monitoring";
 import { AdminSettingsPage } from "@/pages/app/admin-settings";
 import { AdminSupportPage } from "@/pages/app/admin-support";
-import { EventsPage } from "@/pages/app/events";
 import { EventDetailPage } from "@/pages/app/event-detail";
+import { EventsPage } from "@/pages/app/events";
 import { FeedbackPage } from "@/pages/app/feedback";
-import { TickersPage } from "@/pages/app/tickers";
+import { ProfilePage } from "@/pages/app/profile";
+import { RecommendationsPage } from "@/pages/app/recommendations";
 import { TickerDetailPage } from "@/pages/app/ticker-detail";
+import { TickersPage } from "@/pages/app/tickers";
+import { AdminUsersPage } from "@/pages/admin/users";
 
 function NotFound() {
   return (
@@ -51,11 +54,14 @@ export function App() {
             </RequireAuth>
           }
         >
-          <Route index element={<Navigate to="tickers" replace />} />
+          <Route index element={<Navigate to="for-you" replace />} />
+          <Route path="profile" element={<ProfilePage />} />
           <Route path="account" element={<AccountPage />} />
 
           {/* Subscription-gated routes */}
           <Route element={<RequireSubscription />}>
+            <Route path="for-you" element={<RecommendationsPage />} />
+            <Route path="recommendations" element={<Navigate to="/app/for-you" replace />} />
             <Route path="tickers" element={<TickersPage />} />
             <Route path="ticker/:ticker" element={<TickerDetailPage />} />
             <Route path="events" element={<EventsPage />} />
@@ -65,6 +71,7 @@ export function App() {
 
           {/* Admin routes */}
           <Route element={<RequireAdmin />}>
+            <Route path="admin/users" element={<AdminUsersPage />} />
             <Route path="admin/monitoring" element={<AdminMonitoringPage />} />
             <Route path="admin/jobs" element={<AdminJobsPage />} />
             <Route path="admin/feedback" element={<AdminFeedbackPage />} />

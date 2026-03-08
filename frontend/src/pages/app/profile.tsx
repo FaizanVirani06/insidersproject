@@ -1,47 +1,198 @@
 import * as React from "react";
-import { apiFetch } from "@/lib/api";
+import { Link } from "react-router-dom";
 
-type Profile = {
-  user_id: number;
-  full_name: string | null;
-  contact_email: string | null;
-  contact_phone: string | null;
-  preferences: {
-    preferred_sectors: string[];
-    min_ai_rating: number;
-    max_beta: number | null;
-    trade_side: "buy" | "sell" | "both";
-    email_alerts_enabled: boolean;
-    daily_digest_enabled: boolean;
-    [k: string]: any;
-  };
-  created_at: string;
-  updated_at: string;
-};
+import { useAuth } from "@/components/auth-provider";
+import { apiFetch } from "@/lib/api";
+import type { UserProfileRecord } from "@/lib/types";
+
 
 type ProfileResponse = {
-  profile: Profile;
+  profile: UserProfileRecord;
 };
 
 type SectorResponse = {
   sectors: string[];
 };
 
+type UpdateCredentialsResponse = {
+  user: {
+    user_id: number;
+    username: string;
+    role: "admin" | "user";
+    subscription_status?: string | null;
+    is_paid?: boolean;
+    is_admin?: boolean;
+  };
+};
+
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
 }
 
-export function ProfilePage() {
-  const [loading, setLoading] = React.useState(false);
-  const [saving, setSaving] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-  const [saved, setSaved] = React.useState(false);
+function prettyDetail(detail: string | null | undefined): string {
+  switch ((detail || "").trim()) {
+    case "current_password_required":
+      return "Enter your current password to save login changes.";
+    case "invalid_current_password":
+      return "Your current password was incorrect.";
+    case "username_exists":
+      return "That login email is already in use.";
+    case "username_too_short":
+      return "Login email must be at least 3 characters.";
+    case "password_too_short":
+      return "New password must be at least 8 characters.";
+    case "no_credential_changes_requested":
+      return "Change the login email or enter a new password before saving.";
+    case "invalid_trade_side":
+      return "Trade side must be buys, sells, or both.";
+    case "invalid_min_ai_rating":
+      return "Minimum AI rating must be between 0 and 10.";
+    case "invalid_max_beta":
+      return "Max beta must be blank or a positive number.";
+    default:
+      return detail || "Something went wrong.";
+  }
+}
 
-  const [profile, setProfile] = React.useState<Profile | null>(null);
+async function getErrorMessage(res: Response): Promise<string> {
+  try {
+    const data = await res.json();
+    const detail = typeof data?.detail === "string" ? data.detail : JSON.stringify(data);
+    return prettyDetail(detail);
+  } catch {
+    const txt = await res.text().catch(() => "");
+    return prettyDetail(txt || `HTTP ${res.status}`);
+  }
+}
+
+function SectionCard({
+  title,
+  subtitle,
+  children,
+  right,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+  right?: React.ReactNode;
+}) {
+  return (
+    <div className="glass-panel p-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">{title}</h2>
+          {subtitle ? <p className="mt-1 text-sm muted">{subtitle}</p> : null}
+        </div>
+        {right ? <div className="shrink-0">{right}</div> : null}
+      </div>
+      <div className="mt-6">{children}</div>
+    </div>
+  );
+}
+
+function SummaryCard({ label, value, helper }: { label: string; value: string; helper?: string }) {
+  return (
+    <div className="rounded-2xl border border-zinc-200/70 bg-white/50 p-4 dark:border-zinc-800/60 dark:bg-black/20">
+      <div className="text-xs font-semibold uppercase tracking-[0.16em] muted">{label}</div>
+      <div className="mt-2 text-lg font-semibold text-zinc-900 dark:text-zinc-100">{value}</div>
+      {helper ? <div className="mt-1 text-sm muted">{helper}</div> : null}
+    </div>
+  );
+}
+
+function ChoiceButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "rounded-xl border px-4 py-2 text-sm transition",
+        active
+          ? "border-purple-500/40 bg-purple-500/15 text-purple-700 dark:text-purple-300"
+          : "border-zinc-200/80 bg-white/60 text-zinc-700 hover:border-zinc-300 dark:border-zinc-800/60 dark:bg-black/25 dark:text-zinc-300 dark:hover:border-zinc-700",
+      ].join(" ")}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ToggleRow({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex items-start justify-between gap-4 rounded-2xl border border-zinc-200/70 bg-white/50 p-4 dark:border-zinc-800/60 dark:bg-black/20">
+      <div>
+        <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{label}</div>
+        <div className="mt-1 text-sm muted">{description}</div>
+      </div>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-1 h-4 w-4 cursor-pointer rounded border-zinc-400 text-purple-500 focus:ring-purple-500/40"
+      />
+    </label>
+  );
+}
+
+function SectorButton({
+  active,
+  children,
+  onClick,
+}: {
+  active: boolean;
+  children: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "rounded-xl border px-3 py-3 text-left text-sm transition",
+        active
+          ? "border-cyan-500/35 bg-cyan-500/12 text-cyan-700 dark:text-cyan-300"
+          : "border-zinc-200/80 bg-white/55 text-zinc-700 hover:border-zinc-300 dark:border-zinc-800/60 dark:bg-black/20 dark:text-zinc-300 dark:hover:border-zinc-700",
+      ].join(" ")}
+    >
+      {children}
+    </button>
+  );
+}
+
+export function ProfilePage() {
+  const { user, refresh } = useAuth();
+
+  const [loading, setLoading] = React.useState(false);
+  const [savingProfile, setSavingProfile] = React.useState(false);
+  const [savingCredentials, setSavingCredentials] = React.useState(false);
+
+  const [profileError, setProfileError] = React.useState<string | null>(null);
+  const [credentialsError, setCredentialsError] = React.useState<string | null>(null);
+  const [profileSaved, setProfileSaved] = React.useState(false);
+  const [credentialsSaved, setCredentialsSaved] = React.useState(false);
+
+  const [profile, setProfile] = React.useState<UserProfileRecord | null>(null);
   const [allSectors, setAllSectors] = React.useState<string[]>([]);
   const [sectorQuery, setSectorQuery] = React.useState("");
 
-  // Form state
   const [fullName, setFullName] = React.useState("");
   const [contactEmail, setContactEmail] = React.useState("");
   const [contactPhone, setContactPhone] = React.useState("");
@@ -52,157 +203,251 @@ export function ProfilePage() {
   const [emailAlerts, setEmailAlerts] = React.useState(false);
   const [dailyDigest, setDailyDigest] = React.useState(false);
 
-  function hydrate(p: Profile) {
-    setProfile(p);
-    setFullName(p.full_name || "");
-    setContactEmail(p.contact_email || "");
-    setContactPhone(p.contact_phone || "");
-    setTradeSide((p.preferences?.trade_side as any) || "buy");
-    setMinAi(typeof p.preferences?.min_ai_rating === "number" ? clamp(p.preferences.min_ai_rating, 1, 10) : 7);
-    setMaxBeta(p.preferences?.max_beta === null || p.preferences?.max_beta === undefined ? "" : String(p.preferences.max_beta));
-    setPreferredSectors(Array.isArray(p.preferences?.preferred_sectors) ? p.preferences.preferred_sectors : []);
-    setEmailAlerts(Boolean(p.preferences?.email_alerts_enabled));
-    setDailyDigest(Boolean(p.preferences?.daily_digest_enabled));
-  }
+  const [loginEmail, setLoginEmail] = React.useState("");
+  const [currentPassword, setCurrentPassword] = React.useState("");
+  const [newPassword, setNewPassword] = React.useState("");
+  const [confirmPassword, setConfirmPassword] = React.useState("");
 
-  async function load() {
+  React.useEffect(() => {
+    setLoginEmail(user?.username || "");
+  }, [user?.username]);
+
+  const hydrate = React.useCallback((next: UserProfileRecord) => {
+    setProfile(next);
+    setFullName(next.full_name || "");
+    setContactEmail(next.contact_email || "");
+    setContactPhone(next.contact_phone || "");
+    setTradeSide((next.preferences?.trade_side as "buy" | "sell" | "both") || "buy");
+    setMinAi(typeof next.preferences?.min_ai_rating === "number" ? clamp(next.preferences.min_ai_rating, 0, 10) : 7);
+    setMaxBeta(next.preferences?.max_beta === null || next.preferences?.max_beta === undefined ? "" : String(next.preferences.max_beta));
+    setPreferredSectors(Array.isArray(next.preferences?.preferred_sectors) ? next.preferences.preferred_sectors : []);
+    setEmailAlerts(Boolean(next.preferences?.email_alerts_enabled));
+    setDailyDigest(Boolean(next.preferences?.daily_digest_enabled));
+  }, []);
+
+  const load = React.useCallback(async () => {
     setLoading(true);
-    setError(null);
-    setSaved(false);
+    setProfileError(null);
     try {
-      const [pr, sr] = await Promise.all([
+      const [profileRes, sectorsRes] = await Promise.all([
         apiFetch("/profile", { cache: "no-store" }),
         apiFetch("/public/sectors", { cache: "force-cache" }),
       ]);
-      if (!pr.ok) throw new Error(await pr.text());
-      if (!sr.ok) throw new Error(await sr.text());
 
-      const pdata = (await pr.json()) as ProfileResponse;
-      const sdata = (await sr.json()) as SectorResponse;
-      hydrate(pdata.profile);
-      setAllSectors((sdata.sectors || []).filter(Boolean));
+      if (!profileRes.ok) throw new Error(await getErrorMessage(profileRes));
+      if (!sectorsRes.ok) throw new Error(await getErrorMessage(sectorsRes));
+
+      const profileJson = (await profileRes.json()) as ProfileResponse;
+      const sectorsJson = (await sectorsRes.json()) as SectorResponse;
+      hydrate(profileJson.profile);
+      setAllSectors((sectorsJson.sectors || []).filter(Boolean));
     } catch (e: any) {
-      setError(e?.message || "Failed to load profile");
+      setProfileError(e?.message || "Failed to load profile.");
     } finally {
       setLoading(false);
     }
-  }
+  }, [hydrate]);
 
   React.useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [load]);
 
   const filteredSectors = React.useMemo(() => {
     const q = sectorQuery.trim().toLowerCase();
     if (!q) return allSectors;
-    return allSectors.filter((s) => s.toLowerCase().includes(q));
+    return allSectors.filter((sector) => sector.toLowerCase().includes(q));
   }, [allSectors, sectorQuery]);
 
+  const selectedSectorCount = preferredSectors.length;
+  const sectorsLabel = selectedSectorCount === 0 ? "All sectors" : `${selectedSectorCount} selected`;
+  const loginChanged = loginEmail.trim().toLowerCase() !== (user?.username || "").trim().toLowerCase();
+  const canSaveCredentials = Boolean(currentPassword.trim()) && (loginChanged || Boolean(newPassword.trim()));
+
   function toggleSector(sector: string) {
-    setPreferredSectors((prev) => {
-      if (prev.includes(sector)) return prev.filter((x) => x !== sector);
-      return [...prev, sector];
-    });
+    setPreferredSectors((prev) => (prev.includes(sector) ? prev.filter((value) => value !== sector) : [...prev, sector]));
   }
 
-  async function save() {
-    setSaving(true);
-    setError(null);
-    setSaved(false);
-    try {
-      const payload = {
-        full_name: fullName,
-        contact_email: contactEmail,
-        contact_phone: contactPhone,
-        trade_side: tradeSide,
-        min_ai_rating: clamp(minAi, 1, 10),
-        // allow clearing
-        max_beta: maxBeta.trim() === "" ? null : Number(maxBeta),
-        preferred_sectors: preferredSectors,
-        email_alerts_enabled: emailAlerts,
-        daily_digest_enabled: dailyDigest,
-      };
+  function selectAllVisible() {
+    if (filteredSectors.length === 0) return;
+    const everyVisibleSelected = filteredSectors.every((sector) => preferredSectors.includes(sector));
+    if (everyVisibleSelected) {
+      setPreferredSectors((prev) => prev.filter((sector) => !filteredSectors.includes(sector)));
+    } else {
+      setPreferredSectors((prev) => Array.from(new Set([...prev, ...filteredSectors])));
+    }
+  }
 
+  function clearAllSectors() {
+    setPreferredSectors([]);
+  }
+
+  async function saveProfile() {
+    const trimmedBeta = maxBeta.trim();
+    if (trimmedBeta && !Number.isFinite(Number(trimmedBeta))) {
+      setProfileError("Max beta must be blank or a number.");
+      return;
+    }
+
+    setSavingProfile(true);
+    setProfileSaved(false);
+    setProfileError(null);
+
+    try {
       const res = await apiFetch("/profile", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          full_name: fullName,
+          contact_email: contactEmail,
+          contact_phone: contactPhone,
+          trade_side: tradeSide,
+          min_ai_rating: clamp(minAi, 0, 10),
+          max_beta: trimmedBeta === "" ? null : Number(trimmedBeta),
+          preferred_sectors: preferredSectors,
+          email_alerts_enabled: emailAlerts,
+          daily_digest_enabled: dailyDigest,
+        }),
+      });
+
+      if (!res.ok) throw new Error(await getErrorMessage(res));
+
+      const json = (await res.json()) as ProfileResponse;
+      hydrate(json.profile);
+      setProfileSaved(true);
+      window.setTimeout(() => setProfileSaved(false), 2600);
+    } catch (e: any) {
+      setProfileError(e?.message || "Failed to save profile.");
+    } finally {
+      setSavingProfile(false);
+    }
+  }
+
+  async function saveCredentials() {
+    if (!currentPassword.trim()) {
+      setCredentialsError("Enter your current password to confirm the change.");
+      return;
+    }
+    if (newPassword && newPassword !== confirmPassword) {
+      setCredentialsError("New password and confirmation do not match.");
+      return;
+    }
+    if (!loginChanged && !newPassword.trim()) {
+      setCredentialsError("Change the login email or enter a new password before saving.");
+      return;
+    }
+
+    setSavingCredentials(true);
+    setCredentialsSaved(false);
+    setCredentialsError(null);
+
+    try {
+      const payload: Record<string, string> = {
+        current_password: currentPassword,
+      };
+      if (loginChanged) payload.new_username = loginEmail.trim();
+      if (newPassword.trim()) payload.new_password = newPassword;
+
+      const res = await apiFetch("/auth/credentials", {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error(await res.text());
-      const out = (await res.json()) as ProfileResponse;
-      hydrate(out.profile);
-      setSaved(true);
-      window.setTimeout(() => setSaved(false), 2500);
+
+      if (!res.ok) throw new Error(await getErrorMessage(res));
+
+      const json = (await res.json()) as UpdateCredentialsResponse;
+      setLoginEmail(json.user.username || loginEmail.trim());
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setCredentialsSaved(true);
+      window.setTimeout(() => setCredentialsSaved(false), 2600);
+      await refresh();
     } catch (e: any) {
-      setError(e?.message || "Failed to save profile");
+      setCredentialsError(e?.message || "Failed to update login credentials.");
     } finally {
-      setSaving(false);
+      setSavingCredentials(false);
     }
   }
 
+  const alertsEnabled = emailAlerts || dailyDigest;
+  const updatedAt = profile?.updated_at || profile?.created_at || null;
+
   return (
-    <div>
-      <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
-        <div>
-          <h1 className="text-2xl font-semibold">Profile</h1>
-          <p className="mt-1 text-sm muted">Tune recommendations and manage your contact details.</p>
+    <div className="space-y-6">
+      <div className="glass-panel p-6">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-3xl">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] muted">Workspace settings</div>
+            <h1 className="mt-2 text-3xl font-semibold text-zinc-900 dark:text-zinc-100">Profile</h1>
+            <p className="mt-2 text-sm muted">
+              Tune your “For you” feed, manage contact details, and update the login email and password attached to your account.
+            </p>
+            {updatedAt ? <div className="mt-3 text-xs muted">Last updated {updatedAt}</div> : null}
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <Link to="/app/for-you" className="btn-secondary h-10 px-4">
+              View your feed
+            </Link>
+            <button type="button" className="btn-secondary h-10 px-4" onClick={() => void load()} disabled={loading}>
+              {loading ? "Reloading…" : "Reload"}
+            </button>
+            <button type="button" className="btn-primary h-10 px-5" onClick={() => void saveProfile()} disabled={loading || savingProfile}>
+              {savingProfile ? "Saving…" : "Save profile"}
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button type="button" className="btn-secondary h-10 px-4" onClick={() => void load()} disabled={loading}>
-            Reload
-          </button>
-          <button type="button" className="btn-primary h-10 px-4" onClick={() => void save()} disabled={saving || loading}>
-            {saving ? "Saving…" : "Save"}
-          </button>
+
+        <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <SummaryCard label="Login email" value={user?.username || "—"} helper="Used when signing in" />
+          <SummaryCard label="Feed mode" value={tradeSide === "both" ? "Buys + sells" : tradeSide === "buy" ? "Buys only" : "Sells only"} helper={`Min AI ${minAi.toFixed(1)} / 10`} />
+          <SummaryCard label="Sector filters" value={sectorsLabel} helper={selectedSectorCount === 0 ? "Nothing excluded" : "Used on your For you page"} />
+          <SummaryCard label="Alerts" value={alertsEnabled ? "Enabled" : "Off"} helper={alertsEnabled ? "Email or digest is on" : "No email delivery enabled"} />
         </div>
       </div>
 
-      {error ? (
-        <div className="mt-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800/40 dark:bg-red-950/40 dark:text-red-200">
-          {error}
+      {profileError ? (
+        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-700 dark:text-red-300">{profileError}</div>
+      ) : null}
+      {profileSaved ? (
+        <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">
+          Profile settings saved.
+        </div>
+      ) : null}
+      {credentialsError ? (
+        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-700 dark:text-red-300">{credentialsError}</div>
+      ) : null}
+      {credentialsSaved ? (
+        <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">
+          Login credentials updated.
         </div>
       ) : null}
 
-      {saved ? (
-        <div className="mt-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 dark:border-emerald-800/40 dark:bg-emerald-950/40 dark:text-emerald-200">
-          Saved.
-        </div>
-      ) : null}
-
-      <div className="mt-8 grid gap-6 lg:grid-cols-2">
-        {/* Contact */}
-        <div className="glass-card p-6">
-          <h2 className="text-lg font-semibold">Contact information</h2>
-          <p className="mt-1 text-sm muted">Used for account and alerts (if enabled).</p>
-
-          <div className="mt-5 grid gap-4">
+      <div className="grid gap-6 xl:grid-cols-2">
+        <SectionCard title="Contact information" subtitle="Used for account communication and alerts if you enable them.">
+          <div className="grid gap-4">
             <div>
-              <label className="text-sm font-medium">Full name</label>
-              <input
-                className="input mt-1 h-10"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                placeholder="Jane Doe"
-              />
+              <label className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Full name</label>
+              <input className="input mt-2 h-11" value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Jane Doe" />
             </div>
 
             <div>
-              <label className="text-sm font-medium">Email</label>
+              <label className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Contact email</label>
               <input
-                className="input mt-1 h-10"
+                className="input mt-2 h-11"
                 value={contactEmail}
                 onChange={(e) => setContactEmail(e.target.value)}
                 placeholder="you@example.com"
                 inputMode="email"
               />
-              <div className="mt-1 text-xs muted">This does not change your login email.</div>
+              <div className="mt-1 text-xs muted">This is separate from the login email you use to sign in.</div>
             </div>
 
             <div>
-              <label className="text-sm font-medium">Phone</label>
+              <label className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Phone</label>
               <input
-                className="input mt-1 h-10"
+                className="input mt-2 h-11"
                 value={contactPhone}
                 onChange={(e) => setContactPhone(e.target.value)}
                 placeholder="+1 (555) 123-4567"
@@ -210,125 +455,183 @@ export function ProfilePage() {
               />
             </div>
           </div>
-        </div>
+        </SectionCard>
 
-        {/* Preferences */}
-        <div className="glass-card p-6">
-          <h2 className="text-lg font-semibold">Preferences</h2>
-          <p className="mt-1 text-sm muted">Control what shows up in your "For you" feed.</p>
-
-          <div className="mt-5 grid gap-5">
+        <SectionCard title="Preferences" subtitle="Control which insider events rise to the top of your personal feed.">
+          <div className="space-y-6">
             <div>
-              <div className="text-sm font-medium">Show trades</div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {([
-                  { k: "buy", label: "Buys" },
-                  { k: "sell", label: "Sells" },
-                  { k: "both", label: "Both" },
-                ] as const).map((opt) => (
-                  <button
-                    key={opt.k}
-                    type="button"
-                    className={
-                      tradeSide === opt.k
-                        ? "btn-primary h-10 px-4"
-                        : "btn-secondary h-10 px-4"
-                    }
-                    onClick={() => setTradeSide(opt.k)}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
+              <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Show trades</div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <ChoiceButton active={tradeSide === "buy"} onClick={() => setTradeSide("buy")}>Buys</ChoiceButton>
+                <ChoiceButton active={tradeSide === "sell"} onClick={() => setTradeSide("sell")}>Sells</ChoiceButton>
+                <ChoiceButton active={tradeSide === "both"} onClick={() => setTradeSide("both")}>Both</ChoiceButton>
               </div>
-              <div className="mt-1 text-xs muted">Default is buys only.</div>
+              <div className="mt-2 text-xs muted">Buys only is the default for new profiles.</div>
             </div>
 
             <div>
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-medium">Minimum AI rating</label>
-                <span className="text-sm font-semibold">{minAi.toFixed(1)} / 10</span>
+              <div className="flex items-center justify-between gap-3">
+                <label className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Minimum AI rating</label>
+                <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{minAi.toFixed(1)} / 10</div>
               </div>
               <input
                 type="range"
-                min={1}
+                min={0}
                 max={10}
                 step={0.5}
                 value={minAi}
                 onChange={(e) => setMinAi(Number(e.target.value))}
-                className="mt-2 w-full"
+                className="mt-3 w-full accent-purple-500"
               />
-              <div className="mt-1 text-xs muted">Higher values show fewer, higher-signal trades.</div>
+              <div className="mt-2 text-xs muted">Higher values show fewer, higher-conviction signals.</div>
             </div>
 
             <div>
-              <label className="text-sm font-medium">Max beta (optional)</label>
+              <label className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Max beta (optional)</label>
               <input
-                className="input mt-1 h-10"
+                className="input mt-2 h-11"
                 value={maxBeta}
                 onChange={(e) => setMaxBeta(e.target.value)}
                 placeholder="e.g. 1.5"
                 inputMode="decimal"
               />
-              <div className="mt-1 text-xs muted">Leave blank to ignore beta.</div>
+              <div className="mt-1 text-xs muted">Leave blank to ignore beta when generating recommendations.</div>
             </div>
+          </div>
+        </SectionCard>
+      </div>
 
-            <div>
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-medium">Preferred sectors</label>
-                <span className="text-xs muted">{preferredSectors.length ? `${preferredSectors.length} selected` : "All"}</span>
-              </div>
+      <div className="grid gap-6 xl:grid-cols-[1.35fr_0.9fr]">
+        <SectionCard
+          title="Preferred sectors"
+          subtitle="Pick the industries you want your “For you” feed to prioritize."
+          right={
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="btn-secondary h-9 px-3" onClick={selectAllVisible} disabled={filteredSectors.length === 0}>
+                {filteredSectors.length > 0 && filteredSectors.every((sector) => preferredSectors.includes(sector)) ? "Deselect visible" : "Select visible"}
+              </button>
+              <button type="button" className="btn-ghost h-9 px-3" onClick={clearAllSectors} disabled={preferredSectors.length === 0}>
+                Clear all
+              </button>
+            </div>
+          }
+        >
+          <div className="space-y-4">
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
               <input
-                className="input mt-2 h-10"
+                className="input h-11"
                 value={sectorQuery}
                 onChange={(e) => setSectorQuery(e.target.value)}
                 placeholder="Search sectors…"
               />
+              <div className="text-sm muted">{preferredSectors.length === 0 ? "All sectors are currently allowed." : `${preferredSectors.length} sector${preferredSectors.length === 1 ? "" : "s"} selected.`}</div>
+            </div>
 
-              <div className="mt-2 max-h-56 overflow-auto rounded-lg border border-zinc-200/70 bg-white/40 p-2 dark:border-zinc-800/60 dark:bg-black/20">
-                {loading && !profile ? <div className="p-2 text-sm muted">Loading…</div> : null}
-                {!loading && filteredSectors.length === 0 ? (
-                  <div className="p-2 text-sm muted">No sectors match your search.</div>
-                ) : null}
-                <div className="grid gap-1">
-                  {filteredSectors.map((s) => {
-                    const checked = preferredSectors.includes(s);
-                    return (
-                      <label
-                        key={s}
-                        className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 hover:bg-black/5 dark:hover:bg-white/10"
-                      >
-                        <input type="checkbox" checked={checked} onChange={() => toggleSector(s)} />
-                        <span className="text-sm">{s}</span>
-                      </label>
-                    );
-                  })}
+            {allSectors.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-zinc-300/70 px-4 py-8 text-center text-sm muted dark:border-zinc-700/70">
+                Sector data has not been loaded yet.
+              </div>
+            ) : filteredSectors.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-zinc-300/70 px-4 py-8 text-center text-sm muted dark:border-zinc-700/70">
+                No sectors matched “{sectorQuery}”.
+              </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {filteredSectors.map((sector) => {
+                  const active = preferredSectors.includes(sector);
+                  return (
+                    <SectorButton key={sector} active={active} onClick={() => toggleSector(sector)}>
+                      <div className="font-medium">{sector}</div>
+                      <div className="mt-1 text-xs muted">{active ? "Included in your feed" : "Click to include"}</div>
+                    </SectorButton>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </SectionCard>
+
+        <div className="space-y-6">
+          <SectionCard title="Alerts & delivery" subtitle="Decide whether saved signals can contact you outside the app.">
+            <div className="space-y-3">
+              <ToggleRow
+                label="Email alerts"
+                description="Allow high-signal events to be sent to your contact email."
+                checked={emailAlerts}
+                onChange={setEmailAlerts}
+              />
+              <ToggleRow
+                label="Daily digest"
+                description="Receive a daily summary of the strongest events that matched your profile."
+                checked={dailyDigest}
+                onChange={setDailyDigest}
+              />
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Account security" subtitle="Update the login email and password used to access the platform.">
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Login email</label>
+                <input
+                  className="input mt-2 h-11"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  inputMode="email"
+                />
+                <div className="mt-1 text-xs muted">This changes the credential you use to sign in. It does not change your contact email above.</div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-zinc-900 dark:text-zinc-100">New password</label>
+                <input
+                  type="password"
+                  className="input mt-2 h-11"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="Leave blank to keep your current password"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Confirm new password</label>
+                <input
+                  type="password"
+                  className="input mt-2 h-11"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Repeat the new password"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Current password</label>
+                <input
+                  type="password"
+                  className="input mt-2 h-11"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  placeholder="Required to confirm any login change"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-zinc-200/70 bg-white/50 p-4 dark:border-zinc-800/60 dark:bg-black/20">
+                <div>
+                  <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Ready to update your sign-in?</div>
+                  <div className="mt-1 text-sm muted">Use your current password to confirm changes to the login email or password.</div>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <Link to="/app/account" className="btn-secondary h-10 px-4">
+                    Billing & account
+                  </Link>
+                  <button type="button" className="btn-primary h-10 px-4" onClick={() => void saveCredentials()} disabled={!canSaveCredentials || savingCredentials}>
+                    {savingCredentials ? "Updating…" : "Update login"}
+                  </button>
                 </div>
               </div>
-              <div className="mt-1 text-xs muted">If none are selected, we show all sectors.</div>
             </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="flex items-center gap-2">
-                <input type="checkbox" checked={emailAlerts} onChange={(e) => setEmailAlerts(e.target.checked)} />
-                <span className="text-sm">Email alerts</span>
-              </label>
-              <label className="flex items-center gap-2">
-                <input type="checkbox" checked={dailyDigest} onChange={(e) => setDailyDigest(e.target.checked)} />
-                <span className="text-sm">Daily digest</span>
-              </label>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-8">
-        <div className="glass-card p-6">
-          <h2 className="text-lg font-semibold">Notes</h2>
-          <ul className="mt-3 list-disc space-y-2 pl-5 text-sm muted">
-            <li>Recommendations are based on publicly available SEC filings (Form 4).</li>
-            <li>AI ratings are informational and do not constitute financial advice.</li>
-            <li>You can always browse the full feed under the Events and Tickers pages.</li>
-          </ul>
+          </SectionCard>
         </div>
       </div>
     </div>

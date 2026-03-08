@@ -1,328 +1,161 @@
-"use client";
-
 import * as React from "react";
 import { Link } from "react-router-dom";
 
-import type { EventDetail, InsiderEventRow } from "@/lib/types";
-import { fmtAiRating, fmtDate, fmtDollars, fmtNumber, fmtPercent } from "@/lib/format";
-import { apiFetch } from "@/lib/api";
+import type { InsiderEventRow } from "@/lib/types";
+import { fmtAiRating, fmtDate, fmtDollars, fmtInt, fmtPercent, fmtUsd } from "@/lib/format";
+import { getBestEventAiRating, getEventSideSummaries, getPrimaryEventSide, type EventSideSummary } from "@/lib/event-utils";
 
-function Badge({ children }: { children: React.ReactNode }) {
+function Pill({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs text-black/70 dark:text-white/70">
+    <span className={["inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium backdrop-blur-sm", className].join(" ")}>
       {children}
     </span>
   );
 }
 
-function SideBadge({ side }: { side: "buy" | "sell" }) {
+function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <span
-      className={
-        "inline-flex items-center rounded-full border px-2 py-0.5 text-xs " +
-        (side === "buy"
-          ? "bg-emerald-500/10 text-emerald-700 border-emerald-500/30 dark:text-emerald-300"
-          : "bg-amber-500/10 text-amber-700 border-amber-500/30 dark:text-amber-300")
-      }
-    >
-      {side.toUpperCase()}
-    </span>
+    <div className="rounded-xl border border-zinc-200/70 bg-white/50 p-3 text-center dark:border-zinc-800/60 dark:bg-black/20">
+      <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{value}</div>
+      <div className="mt-1 text-[11px] uppercase tracking-[0.16em] muted">{label}</div>
+    </div>
   );
 }
 
-function fmtConfidencePct(c?: number | null): string {
-  if (c === null || c === undefined || Number.isNaN(c)) return "—";
-  const x = Math.round(Number(c) * 100);
-  if (!Number.isFinite(x)) return "—";
-  return `${x}%`;
+function sideClass(summary: EventSideSummary): string {
+  return summary.side === "buy"
+    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+    : "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
 }
 
-function pickAiSummary(detail: EventDetail): { side: "buy" | "sell"; status: string; rating: number | null; confidence: number | null; summary: string | null } | null {
-  const out = detail.ai_latest?.output;
-  if (!out?.verdict) return null;
+function buildMetrics(summary: EventSideSummary): Array<{ label: string; value: string }> {
+  const metrics: Array<{ label: string; value: string }> = [];
 
-  const buy = out.verdict.buy_signal;
-  const sell = out.verdict.sell_signal;
+  if (summary.dollars !== null) metrics.push({ label: `${summary.label} value`, value: fmtDollars(summary.dollars) });
+  if (summary.shares !== null) metrics.push({ label: `${summary.label} shares`, value: fmtInt(summary.shares) });
+  if (summary.vwap !== null) metrics.push({ label: `${summary.label} avg`, value: fmtUsd(summary.vwap) });
+  if (summary.pctHoldingsChange !== null) {
+    metrics.push({ label: "Holding change", value: fmtPercent(summary.pctHoldingsChange, { digits: 1 }) });
+  }
+  if (summary.aiRating !== null) metrics.push({ label: `${summary.label} AI`, value: fmtAiRating(summary.aiRating) });
 
-  // Prefer whichever side is applicable with a rating.
-  const candidates: Array<{ side: "buy" | "sell"; sig: any }> = [
-    { side: "buy", sig: buy },
-    { side: "sell", sig: sell },
-  ];
+  return metrics.slice(0, 4);
+}
 
-  const applicable = candidates.filter((c) => c.sig?.status === "applicable");
-  const pickFrom = applicable.length ? applicable : candidates;
+function SidePanel({ summary }: { summary: EventSideSummary }) {
+  const metrics = buildMetrics(summary);
 
-  // Prefer higher rating
-  pickFrom.sort((a, b) => (b.sig?.rating ?? -1) - (a.sig?.rating ?? -1));
-  const top = pickFrom[0];
-  if (!top || !top.sig) return null;
+  return (
+    <div className="rounded-2xl border border-zinc-200/70 bg-white/50 p-4 backdrop-blur-sm dark:border-zinc-800/60 dark:bg-black/20">
+      <div className="flex items-center justify-between gap-2">
+        <Pill className={sideClass(summary)}>{summary.label}</Pill>
+        {summary.clusterFlag ? <Pill className="border-cyan-500/30 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300">Cluster</Pill> : null}
+      </div>
+
+      {summary.tradeDate ? <div className="mt-3 text-xs muted">Trade date: {fmtDate(summary.tradeDate)}</div> : null}
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        {metrics.length > 0 ? (
+          metrics.map((metric) => <Metric key={metric.label} label={metric.label} value={metric.value} />)
+        ) : (
+          <div className="col-span-2 rounded-xl border border-dashed border-zinc-300/70 px-3 py-4 text-sm muted dark:border-zinc-700/70">
+            Open the event for the full transaction breakdown.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function getOwnerDisplay(event: InsiderEventRow): { title: string; subtitle: string | null } {
+  const ownerCount = Number((event as any).owner_count ?? 0);
+  const ownerNames = Array.isArray((event as any).owner_names) ? ((event as any).owner_names as string[]) : [];
+
+  if (ownerCount > 1) {
+    const preview = ownerNames.slice(0, 2).join(", ");
+    const remainder = ownerCount > 2 ? ` +${ownerCount - 2} more` : "";
+    return {
+      title: `${ownerCount} insiders`,
+      subtitle: preview ? `${preview}${remainder}` : "Grouped filing",
+    };
+  }
 
   return {
-    side: top.side,
-    status: String(top.sig.status ?? "unknown"),
-    rating: top.sig.rating ?? null,
-    confidence: top.sig.confidence ?? null,
-    summary: top.sig.summary ?? null,
+    title: String(event.owner_name_display || event.owner_key || "Unknown insider"),
+    subtitle: event.owner_title ? String(event.owner_title) : null,
   };
 }
 
 export function EventCard({ event }: { event: InsiderEventRow }) {
-  const [open, setOpen] = React.useState(false);
-  const [detail, setDetail] = React.useState<EventDetail | null>(null);
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-
-  const hasBuy = Number(event.has_buy ?? 0) === 1;
-  const hasSell = Number(event.has_sell ?? 0) === 1;
-
-  const toggle = async () => {
-    const next = !open;
-    setOpen(next);
-    if (!next || detail || loading) return;
-
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await apiFetch(
-        `/api/backend/event/${encodeURIComponent(event.issuer_cik)}/${encodeURIComponent(
-          event.owner_key
-        )}/${encodeURIComponent(event.accession_number)}`,
-        { cache: "no-store" }
-      );
-      if (!res.ok) throw new Error(await res.text());
-      const data = (await res.json()) as EventDetail;
-      setDetail(data);
-    } catch (e: any) {
-      setError(e?.message || "Failed to load event");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const aiSummary = detail ? pickAiSummary(detail) : null;
-
-  const buyRating = typeof event.ai_buy_rating === "number" ? (event.ai_buy_rating as number) : null;
-  const sellRating = typeof event.ai_sell_rating === "number" ? (event.ai_sell_rating as number) : null;
-  const bestRating = typeof (event as any).best_ai_rating === "number" ? ((event as any).best_ai_rating as number) : Math.max(buyRating ?? -1, sellRating ?? -1);
-  const bestRatingDisplay = bestRating >= 0 ? fmtAiRating(bestRating) : "—";
-  const bestSide = (() => {
-    if (buyRating === null && sellRating === null) {
-      if (hasBuy && !hasSell) return "BUY";
-      if (hasSell && !hasBuy) return "SELL";
-      return "—";
-    }
-    if (buyRating !== null && (sellRating === null || buyRating >= sellRating)) return "BUY";
-    return "SELL";
-  })();
+  const summaries = getEventSideSummaries(event);
+  const bestAi = getBestEventAiRating(event);
+  const primarySide = getPrimaryEventSide(event);
+  const owner = getOwnerDisplay(event);
+  const confidence =
+    event.ai_confidence === null || event.ai_confidence === undefined || Number.isNaN(Number(event.ai_confidence))
+      ? null
+      : `${Math.round(Number(event.ai_confidence) * 100)}%`;
 
   return (
-    <div className="group relative overflow-hidden rounded-lg border border-zinc-200/70 bg-white/60 p-6 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:bg-white/80 hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900/50 dark:hover:border-zinc-700 dark:hover:bg-zinc-900/80">
-      {/* Gradient glow on hover */}
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-purple-500/10 to-cyan-500/10 opacity-0 transition-opacity group-hover:opacity-100" />
+    <Link
+      to={`/app/event/${encodeURIComponent(event.issuer_cik)}/${encodeURIComponent(event.owner_key)}/${encodeURIComponent(event.accession_number)}`}
+      className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-zinc-200/70 bg-white/65 p-5 shadow-sm backdrop-blur-xl transition hover:-translate-y-1 hover:border-zinc-300/80 hover:shadow-lg dark:border-zinc-800/60 dark:bg-zinc-900/55 dark:hover:border-zinc-700"
+    >
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-purple-500/10 via-transparent to-cyan-500/10 opacity-0 transition-opacity group-hover:opacity-100" />
 
-      <button type="button" onClick={toggle} className="relative w-full text-left">
-        {/* Header */}
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              {(event.ticker || (event as any).issuer_name) && (
-                <div className="text-xs text-zinc-500 dark:text-zinc-400">
-                  {event.ticker ? <span className="font-semibold text-zinc-700 dark:text-zinc-200">{String(event.ticker)}</span> : null}
-                  {(event as any).issuer_name ? <span className="ml-2 truncate">{String((event as any).issuer_name)}</span> : null}
-                </div>
-              )}
-            </div>
-
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <div className="truncate text-lg font-semibold text-zinc-900 dark:text-white">
-                {event.owner_name_display || event.owner_key}
-              </div>
-
-              {hasBuy && <SideBadge side="buy" />}
-              {hasSell && <SideBadge side="sell" />}
-
-              {Number(event.cluster_flag_buy ?? 0) === 1 && <Badge>Cluster Buy</Badge>}
-              {Number(event.cluster_flag_sell ?? 0) === 1 && <Badge>Cluster Sell</Badge>}
-            </div>
-
-            <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-              {event.owner_title || "—"}
-              <span className="mx-2">•</span>
-              Filed {fmtDate(event.filing_date)}
-              {event.event_trade_date && (
-                <>
-                  <span className="mx-2">•</span>
-                  Trade {fmtDate(event.event_trade_date)}
-                </>
-              )}
-            </div>
+      <div className="relative flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">{event.ticker || "—"}</div>
+            {event.market_cap_bucket ? <Pill className="border-purple-500/30 bg-purple-500/10 text-purple-700 dark:text-purple-300">{String(event.market_cap_bucket)}</Pill> : null}
           </div>
-
-          {/* Right-side highlight metric */}
-          <div className="shrink-0 text-right">
-            <div className="text-xs text-zinc-500 dark:text-zinc-400">AI score</div>
-            <div className="mt-1 text-2xl font-semibold text-purple-600 dark:text-purple-400">
-              {bestRatingDisplay}
-              {bestSide !== "—" ? <span className="ml-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">{bestSide}</span> : null}
-            </div>
-            <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Conf {fmtConfidencePct(event.ai_confidence)}</div>
-          </div>
+          <div className="mt-1 line-clamp-2 text-sm text-zinc-700 dark:text-zinc-300">{String((event as any).issuer_name || "Unknown issuer")}</div>
         </div>
 
-        {/* Stats */}
-        <div className="mt-4 grid grid-cols-3 gap-3">
-          <div className="text-center">
-            <div className="text-sm font-semibold text-zinc-900 dark:text-white">{fmtDollars(event.buy_dollars_total ?? null)}</div>
-            <div className="text-xs text-zinc-500 dark:text-zinc-500">Buy $</div>
-          </div>
-          <div className="text-center">
-            <div className="text-sm font-semibold text-zinc-900 dark:text-white">{fmtDollars(event.sell_dollars_total ?? null)}</div>
-            <div className="text-xs text-zinc-500 dark:text-zinc-500">Sell $</div>
-          </div>
-          <div className="text-center">
-            <div className="text-sm font-semibold text-zinc-900 dark:text-white">{bestRatingDisplay}</div>
-            <div className="text-xs text-zinc-500 dark:text-zinc-500">AI score</div>
-          </div>
+        <div className="shrink-0 text-right">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] muted">Best event AI</div>
+          <div className="mt-1 text-3xl font-semibold text-purple-600 dark:text-purple-400">{fmtAiRating(bestAi)}</div>
+          {primarySide ? <div className="mt-1 text-xs muted">{primarySide.toUpperCase()}</div> : null}
         </div>
+      </div>
 
-        <div className="mt-4 text-xs text-zinc-500 dark:text-zinc-500">
-          Click to {open ? "collapse" : "expand"} details
+      <div className="relative mt-4 flex flex-wrap items-center gap-2">
+        {event.sector ? <Pill className="border-zinc-200/80 bg-white/70 text-zinc-700 dark:border-zinc-800/60 dark:bg-black/25 dark:text-zinc-300">{String(event.sector)}</Pill> : null}
+        {summaries.map((summary) => (
+          <Pill key={summary.side} className={sideClass(summary)}>
+            {summary.label}
+          </Pill>
+        ))}
+      </div>
+
+      <div className="relative mt-4">
+        <div className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{owner.title}</div>
+        <div className="mt-1 text-sm muted">{owner.subtitle || "Insider filing"}</div>
+        <div className="mt-2 text-xs muted">
+          Filed {fmtDate(event.filing_date)}
+          {event.event_trade_date ? <span>{` • Trade ${fmtDate(event.event_trade_date)}`}</span> : null}
+          {confidence ? <span>{` • Confidence ${confidence}`}</span> : null}
         </div>
-      </button>
+      </div>
 
-      {open && (
-        <div className="mt-4 border-t pt-4">
-          {loading && <div className="text-sm text-black/60 dark:text-white/60">Loading…</div>}
+      <div className={["relative mt-5 grid gap-3", summaries.length > 1 ? "md:grid-cols-2" : "grid-cols-1"].join(" ")}>
+        {summaries.map((summary) => (
+          <SidePanel key={summary.side} summary={summary} />
+        ))}
+      </div>
 
-          {error && (
-            <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300">
-              {error}
-            </div>
-          )}
-
-          {detail && (
-            <div className="space-y-4">
-              {/* AI summary */}
-              <div className="rounded-lg border border-zinc-200/70 bg-white/50 p-3 backdrop-blur-sm dark:border-zinc-800 dark:bg-black/20">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold">AI summary</div>
-                  {aiSummary && (
-                    <div className="text-xs text-black/60 dark:text-white/60">
-                      {aiSummary.side.toUpperCase()} • score {fmtAiRating(aiSummary.rating)} • conf {fmtConfidencePct(aiSummary.confidence)}
-                    </div>
-                  )}
-                </div>
-
-                <div className="mt-2 text-sm text-black/80 dark:text-white/80">
-                  {aiSummary?.summary || "No AI summary available for this event."}
-                </div>
-
-                {detail.ai_latest?.model_id && (
-                  <div className="mt-2 text-xs text-black/50 dark:text-white/50">
-                    {detail.ai_latest.model_id} • prompt {detail.ai_latest.prompt_version}
-                  </div>
-                )}
-              </div>
-
-              {/* Outcomes */}
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                <div className="rounded-lg border p-3">
-                  <div className="text-sm font-semibold">Outcomes</div>
-                  <div className="mt-2 space-y-1 text-sm">
-                    {detail.outcomes.length === 0 ? (
-                      <div className="text-black/60 dark:text-white/60">No outcomes computed.</div>
-                    ) : (
-                      detail.outcomes.map((o: any) => (
-                        <div key={`${o.side}-${o.horizon_days}`} className="flex justify-between gap-3">
-                          <div className="text-black/60 dark:text-white/60">
-                            {String(o.side).toUpperCase()} +{o.horizon_days}d
-                          </div>
-                          <div className="font-medium">{fmtPercent(o.return, { digits: 1 })}</div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-
-                <div className="rounded-lg border p-3">
-                  <div className="text-sm font-semibold">Insider stats</div>
-                  <div className="mt-2 space-y-2 text-sm">
-                    {detail.stats.length === 0 ? (
-                      <div className="text-black/60 dark:text-white/60">No stats computed.</div>
-                    ) : (
-                      detail.stats.map((s: any) => (
-                        <div key={`${s.side}`} className="space-y-1">
-                          <div className="text-xs text-black/50 dark:text-white/50">
-                            {String(s.side).toUpperCase()} • eligible 60d {s.eligible_n_60d} / 180d {s.eligible_n_180d}
-                          </div>
-                          <div className="flex justify-between gap-3">
-                            <div className="text-black/60 dark:text-white/60">Win rate (60d)</div>
-                            <div className="font-medium">{fmtNumber(s.win_rate_60d ?? null, { digits: 2 })}</div>
-                          </div>
-                          <div className="flex justify-between gap-3">
-                            <div className="text-black/60 dark:text-white/60">Avg return (60d)</div>
-                            <div className="font-medium">{fmtNumber(s.avg_return_60d ?? null, { digits: 2 })}</div>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Transaction rows */}
-              <div className="rounded-lg border p-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold">Transactions</div>
-                  <div className="text-xs text-black/50 dark:text-white/50">{detail.rows.length} rows</div>
-                </div>
-
-                <div className="mt-2 overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead className="text-black/50 dark:text-white/50">
-                      <tr>
-                        <th className="py-1 pr-3">Date</th>
-                        <th className="py-1 pr-3">Code</th>
-                        <th className="py-1 pr-3">Shares</th>
-                        <th className="py-1 pr-3">Price</th>
-                        <th className="py-1 pr-3">Deriv</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {detail.rows.slice(0, 8).map((r: any) => (
-                        <tr key={r.row_id} className="border-t">
-                          <td className="py-1 pr-3">{fmtDate(r.transaction_date)}</td>
-                          <td className="py-1 pr-3">{r.transaction_code || "—"}</td>
-                          <td className="py-1 pr-3">{fmtNumber(r.shares_abs ?? null, { digits: 0 })}</td>
-                          <td className="py-1 pr-3">{fmtNumber(r.price ?? null, { digits: 2 })}</td>
-                          <td className="py-1 pr-3">{Number(r.is_derivative ?? 0) === 1 ? "Y" : "N"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {detail.rows.length > 8 && (
-                    <div className="mt-2 text-xs text-black/50 dark:text-white/50">
-                      Showing 8 rows. Open detail page to see everything.
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end">
-                <Link
-                  to={`/app/event/${encodeURIComponent(event.issuer_cik)}/${encodeURIComponent(
-                    event.owner_key
-                  )}/${encodeURIComponent(event.accession_number)}`}
-                  className="rounded-md border px-3 py-2 text-sm hover:bg-black/5 dark:hover:bg-white/5"
-                >
-                  View full event
-                </Link>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+      <div className="relative mt-5 flex items-center justify-between gap-3 border-t border-zinc-200/70 pt-4 text-sm dark:border-zinc-800/60">
+        <div className="min-w-0 truncate muted">{event.beta !== null && event.beta !== undefined ? `Beta ${Number(event.beta).toFixed(2)}` : "Open event for full breakdown"}</div>
+        <span className="font-medium text-purple-600 transition group-hover:text-purple-700 dark:text-purple-300 dark:group-hover:text-purple-200">
+          Open event →
+        </span>
+      </div>
+    </Link>
   );
 }

@@ -24,7 +24,7 @@ from insider_platform.auth.crud import (
     touch_last_login,
     verify_user_credentials,
 )
-from insider_platform.auth.security import create_access_token
+from insider_platform.auth.security import create_access_token, hash_password, verify_password
 
 from insider_platform.billing.stripe_billing import (
     create_billing_portal_session,
@@ -171,6 +171,199 @@ class CreateUserRequest(BaseModel):
     role: str = "user"  # admin|user
 
 
+class ProfileUpsertRequest(BaseModel):
+    full_name: str | None = None
+    contact_email: str | None = None
+    contact_phone: str | None = None
+    trade_side: str = "buy"  # buy|sell|both
+    min_ai_rating: float = 7.0
+    max_beta: float | None = None
+    preferred_sectors: list[str] = []
+    email_alerts_enabled: bool = False
+    daily_digest_enabled: bool = False
+
+
+class UpdateCredentialsRequest(BaseModel):
+    current_password: str
+    new_username: str | None = None
+    new_password: str | None = None
+
+
+DEFAULT_PROFILE_PREFERENCES: Dict[str, Any] = {
+    "trade_side": "buy",
+    "min_ai_rating": 7.0,
+    "max_beta": None,
+    "preferred_sectors": [],
+    "email_alerts_enabled": False,
+    "daily_digest_enabled": False,
+}
+
+
+def _unique_nonempty_strs(values: Any) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    if not isinstance(values, list):
+        return out
+    for v in values:
+        s = str(v or "").strip()
+        if not s:
+            continue
+        key = s.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(s)
+    return out
+
+
+def _clean_profile_text(value: Any) -> str | None:
+    s = str(value or "").strip()
+    return s or None
+
+
+def _normalize_profile_preferences(raw: Any) -> Dict[str, Any]:
+    prefs = dict(DEFAULT_PROFILE_PREFERENCES)
+
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        parsed = None
+
+    if not isinstance(parsed, dict):
+        return prefs
+
+    side = str(parsed.get("trade_side") or prefs["trade_side"]).strip().lower()
+    if side in ("buy", "sell", "both"):
+        prefs["trade_side"] = side
+
+    try:
+        min_ai = float(parsed.get("min_ai_rating"))
+        if min_ai < 0:
+            min_ai = 0.0
+        if min_ai > 10:
+            min_ai = 10.0
+        prefs["min_ai_rating"] = float(min_ai)
+    except Exception:
+        pass
+
+    max_beta = parsed.get("max_beta")
+    try:
+        if max_beta is not None:
+            beta = float(max_beta)
+            if beta >= 0:
+                prefs["max_beta"] = beta
+    except Exception:
+        prefs["max_beta"] = None
+
+    prefs["preferred_sectors"] = _unique_nonempty_strs(parsed.get("preferred_sectors"))
+    prefs["email_alerts_enabled"] = bool(parsed.get("email_alerts_enabled"))
+    prefs["daily_digest_enabled"] = bool(parsed.get("daily_digest_enabled"))
+    return prefs
+
+
+def _profile_from_rows(user_row: Dict[str, Any], profile_row: Dict[str, Any] | None) -> Dict[str, Any]:
+    if profile_row is None:
+        username = str(user_row.get("username") or "").strip()
+        default_contact_email = username if "@" in username else None
+        return {
+            "user_id": int(user_row["user_id"]),
+            "full_name": None,
+            "contact_email": default_contact_email,
+            "contact_phone": None,
+            "preferences": dict(DEFAULT_PROFILE_PREFERENCES),
+            "created_at": user_row.get("created_at"),
+            "updated_at": user_row.get("updated_at"),
+        }
+
+    return {
+        "user_id": int(user_row["user_id"]),
+        "full_name": profile_row.get("full_name"),
+        "contact_email": profile_row.get("contact_email"),
+        "contact_phone": profile_row.get("contact_phone"),
+        "preferences": _normalize_profile_preferences(profile_row.get("preferences_json")),
+        "created_at": profile_row.get("created_at") or user_row.get("created_at"),
+        "updated_at": profile_row.get("updated_at") or user_row.get("updated_at"),
+    }
+
+
+def _get_profile_row(conn: Any, user_id: int) -> Dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM user_profiles WHERE user_id=?",
+        (int(user_id),),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _get_current_profile(conn: Any, user_id: int) -> Dict[str, Any]:
+    user_row = conn.execute("SELECT * FROM users WHERE user_id=?", (int(user_id),)).fetchone()
+    if user_row is None:
+        raise HTTPException(status_code=404, detail="user_not_found")
+    return _profile_from_rows(dict(user_row), _get_profile_row(conn, user_id))
+
+
+def _upsert_profile(conn: Any, user_id: int, payload: ProfileUpsertRequest) -> Dict[str, Any]:
+    side = str(payload.trade_side or "buy").strip().lower()
+    if side not in ("buy", "sell", "both"):
+        raise HTTPException(status_code=400, detail="invalid_trade_side")
+
+    try:
+        min_ai = float(payload.min_ai_rating)
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid_min_ai_rating")
+    if min_ai < 0 or min_ai > 10:
+        raise HTTPException(status_code=400, detail="invalid_min_ai_rating")
+
+    max_beta = payload.max_beta
+    if max_beta is not None:
+        try:
+            max_beta = float(max_beta)
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid_max_beta")
+        if max_beta < 0:
+            raise HTTPException(status_code=400, detail="invalid_max_beta")
+
+    prefs = {
+        "trade_side": side,
+        "min_ai_rating": float(min_ai),
+        "max_beta": max_beta,
+        "preferred_sectors": _unique_nonempty_strs(payload.preferred_sectors),
+        "email_alerts_enabled": bool(payload.email_alerts_enabled),
+        "daily_digest_enabled": bool(payload.daily_digest_enabled),
+    }
+
+    now = utcnow_iso()
+    conn.execute(
+        """
+        INSERT INTO user_profiles (
+            user_id,
+            full_name,
+            contact_email,
+            contact_phone,
+            preferences_json,
+            created_at,
+            updated_at
+        )
+        VALUES (?,?,?,?,?,?,?)
+        ON CONFLICT (user_id) DO UPDATE SET
+            full_name=excluded.full_name,
+            contact_email=excluded.contact_email,
+            contact_phone=excluded.contact_phone,
+            preferences_json=excluded.preferences_json,
+            updated_at=excluded.updated_at
+        """,
+        (
+            int(user_id),
+            _clean_profile_text(payload.full_name),
+            _clean_profile_text(payload.contact_email),
+            _clean_profile_text(payload.contact_phone),
+            json.dumps(prefs, sort_keys=True),
+            now,
+            now,
+        ),
+    )
+    return _get_current_profile(conn, user_id)
+
+
 @app.post("/auth/login")
 def auth_login(payload: LoginRequest, response: Response) -> Dict[str, Any]:
     with connect(cfg.DB_DSN) as conn:
@@ -248,6 +441,200 @@ def auth_me(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     return {"user": user}
 
 
+@app.put("/auth/credentials")
+def auth_update_credentials(
+    payload: UpdateCredentialsRequest,
+    response: Response,
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    current_password = payload.current_password or ""
+    if not current_password:
+        raise HTTPException(status_code=400, detail="current_password_required")
+
+    raw_username = (payload.new_username or "").strip()
+    new_username = raw_username.lower() if raw_username else None
+    new_password = payload.new_password or None
+
+    if not new_username and not new_password:
+        raise HTTPException(status_code=400, detail="no_credential_changes_requested")
+
+    if new_username is not None and len(new_username) < 3:
+        raise HTTPException(status_code=400, detail="username_too_short")
+
+    if new_password is not None and len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="password_too_short")
+
+    user_id = int(user["user_id"])
+
+    with connect(cfg.DB_DSN) as conn:
+        row = conn.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="user_not_found")
+
+        if not verify_password(current_password, str(row["password_hash"])):
+            raise HTTPException(status_code=401, detail="invalid_current_password")
+
+        now = utcnow_iso()
+
+        if new_username is not None and new_username != str(row["username"]):
+            existing = conn.execute(
+                "SELECT user_id FROM users WHERE username=? AND user_id<>?",
+                (new_username, user_id),
+            ).fetchone()
+            if existing is not None:
+                raise HTTPException(status_code=409, detail="username_exists")
+            conn.execute(
+                "UPDATE users SET username=?, updated_at=? WHERE user_id=?",
+                (new_username, now, user_id),
+            )
+
+        if new_password is not None:
+            conn.execute(
+                "UPDATE users SET password_hash=?, updated_at=? WHERE user_id=?",
+                (hash_password(new_password), now, user_id),
+            )
+
+        updated = conn.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
+        if updated is None:
+            raise HTTPException(status_code=404, detail="user_not_found")
+
+        public = public_user(updated)
+        public["is_admin"] = (public.get("role") == "admin")
+
+        token = create_access_token(
+            secret=cfg.AUTH_JWT_SECRET,
+            user_id=int(updated["user_id"]),
+            username=str(updated["username"]),
+            role=str(updated["role"]),
+            expires_minutes=int(cfg.AUTH_TOKEN_EXPIRE_MINUTES),
+        )
+        _set_auth_cookies(response, token=token, user=public, cfg=cfg)
+        return {"user": public}
+
+
+@app.get("/profile")
+def get_profile(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    with connect(cfg.DB_DSN) as conn:
+        profile = _get_current_profile(conn, int(user["user_id"]))
+    return {"profile": profile}
+
+
+@app.put("/profile")
+def put_profile(
+    payload: ProfileUpsertRequest,
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    with connect(cfg.DB_DSN) as conn:
+        profile = _upsert_profile(conn, int(user["user_id"]), payload)
+    return {"profile": profile}
+
+
+@app.get("/public/sectors")
+def public_sectors() -> Dict[str, Any]:
+    with connect(cfg.DB_DSN) as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT sector
+            FROM issuer_fundamentals_cache
+            WHERE sector IS NOT NULL AND BTRIM(sector) <> ''
+            ORDER BY sector ASC
+            """
+        ).fetchall()
+    return {"sectors": [str(r["sector"]).strip() for r in rows if str(r.get("sector") or "").strip()]}
+
+
+@app.get("/recommendations")
+def recommendations(
+    days: int = Query(30, ge=1, le=3650),
+    limit: int = Query(60, ge=1, le=200),
+    offset: int = Query(0, ge=0, le=50000),
+    user: Dict[str, Any] = Depends(require_subscription),
+) -> Dict[str, Any]:
+    user_id = int(user["user_id"])
+    start_date = (date.today() - timedelta(days=int(days))).isoformat()
+    page_limit = int(limit) + 1
+
+    best_ai_expr = (
+        "CASE WHEN e.ai_buy_rating IS NULL AND e.ai_sell_rating IS NULL "
+        "THEN NULL "
+        "ELSE GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1)) END"
+    )
+
+    with connect(cfg.DB_DSN) as conn:
+        profile = _get_current_profile(conn, user_id)
+        prefs = _normalize_profile_preferences(profile.get("preferences"))
+
+        where = [
+            "e.filing_date >= ?",
+            "(e.has_buy=1 OR e.has_sell=1)",
+            "(e.ai_buy_rating IS NOT NULL OR e.ai_sell_rating IS NOT NULL OR e.ai_confidence IS NOT NULL)",
+        ]
+        params: list[Any] = [start_date]
+
+        side = str(prefs.get("trade_side") or "buy").strip().lower()
+        if side == "buy":
+            where.append("e.has_buy=1")
+            where.append("COALESCE(e.ai_buy_rating, -1) >= ?")
+            params.append(float(prefs.get("min_ai_rating") or 0.0))
+        elif side == "sell":
+            where.append("e.has_sell=1")
+            where.append("COALESCE(e.ai_sell_rating, -1) >= ?")
+            params.append(float(prefs.get("min_ai_rating") or 0.0))
+        else:
+            where.append(f"COALESCE(({best_ai_expr}), -1) >= ?")
+            params.append(float(prefs.get("min_ai_rating") or 0.0))
+
+        max_beta = prefs.get("max_beta")
+        if max_beta is not None:
+            where.append("f.beta IS NOT NULL AND f.beta <= ?")
+            params.append(float(max_beta))
+
+        preferred_sectors = _unique_nonempty_strs(prefs.get("preferred_sectors"))
+        if preferred_sectors:
+            placeholders = ", ".join(["?" for _ in preferred_sectors])
+            where.append(f"f.sector IN ({placeholders})")
+            params.extend(preferred_sectors)
+
+        where_sql = " AND ".join(where)
+
+        rows = conn.execute(
+            f"""
+            SELECT
+                e.*,
+                {best_ai_expr} AS best_ai_rating,
+                im.issuer_name AS issuer_name,
+                f.sector AS sector,
+                f.beta AS beta
+            FROM insider_events e
+            LEFT JOIN issuer_master im ON im.issuer_cik = e.issuer_cik
+            LEFT JOIN issuer_fundamentals_cache f ON f.ticker = e.ticker
+            WHERE {where_sql}
+            ORDER BY
+                COALESCE(({best_ai_expr}), -1) DESC,
+                COALESCE(e.ai_confidence, -1) DESC,
+                e.filing_date DESC,
+                e.event_trade_date DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, page_limit, offset),
+        ).fetchall()
+
+    events = [dict(r) for r in rows]
+    has_next = len(events) > limit
+    if has_next:
+        events = events[:limit]
+
+    return {
+        "days": days,
+        "limit": limit,
+        "offset": offset,
+        "next_offset": offset + limit if has_next else None,
+        "applied": prefs,
+        "profile": profile,
+        "events": events,
+    }
+
+
 # Admin: create users
 @app.post("/admin/users")
 def admin_create_user(
@@ -263,6 +650,132 @@ def admin_create_user(
                 raise HTTPException(status_code=409, detail=detail)
             raise HTTPException(status_code=400, detail=detail)
     return {"user": u}
+
+
+@app.get("/admin/users")
+def admin_list_users(
+    q: str | None = None,
+    include_inactive: bool = Query(False),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0, le=50000),
+    _admin: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    qn = (q or "").strip()
+    like = f"%{qn}%" if qn else None
+    page_limit = int(limit) + 1
+
+    where = ["1=1"]
+    params: list[Any] = []
+
+    if not include_inactive:
+        where.append("u.is_active=1")
+
+    if like is not None:
+        where.append(
+            "(u.username ILIKE ? OR COALESCE(p.full_name,'') ILIKE ? OR COALESCE(p.contact_email,'') ILIKE ? OR COALESCE(p.contact_phone,'') ILIKE ?)"
+        )
+        params.extend([like, like, like, like])
+
+    where_sql = " AND ".join(where)
+
+    with connect(cfg.DB_DSN) as conn:
+        total_row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS n
+            FROM users u
+            LEFT JOIN user_profiles p ON p.user_id = u.user_id
+            WHERE {where_sql}
+            """,
+            tuple(params),
+        ).fetchone()
+        total = int((total_row or {}).get("n") or 0)
+
+        rows = conn.execute(
+            f"""
+            SELECT
+                u.user_id,
+                u.username,
+                u.role,
+                u.is_active,
+                u.created_at,
+                u.updated_at,
+                u.last_login_at,
+                u.subscription_status,
+                u.current_period_end,
+                u.cancel_at_period_end,
+                u.stripe_customer_id,
+                u.stripe_subscription_id,
+                u.stripe_price_id,
+                p.full_name,
+                p.contact_email,
+                p.contact_phone
+            FROM users u
+            LEFT JOIN user_profiles p ON p.user_id = u.user_id
+            WHERE {where_sql}
+            ORDER BY u.created_at DESC, u.user_id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, page_limit, offset),
+        ).fetchall()
+
+    users = [dict(r) for r in rows]
+    has_next = len(users) > limit
+    if has_next:
+        users = users[:limit]
+
+    return {
+        "users": users,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "next_offset": offset + limit if has_next else None,
+        "query": qn,
+        "include_inactive": include_inactive,
+    }
+
+
+@app.delete("/admin/users/{user_id}")
+def admin_remove_user(
+    user_id: int,
+    admin: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    target_id = int(user_id)
+    admin_id = int(admin["user_id"])
+
+    if target_id == admin_id:
+        raise HTTPException(status_code=400, detail="cannot_remove_current_user")
+
+    with connect(cfg.DB_DSN) as conn:
+        target = conn.execute("SELECT * FROM users WHERE user_id=?", (target_id,)).fetchone()
+        if target is None:
+            raise HTTPException(status_code=404, detail="user_not_found")
+
+        if str(target.get("role") or "") == "admin" and int(target.get("is_active") or 0) == 1:
+            active_admins = conn.execute(
+                "SELECT COUNT(*) AS n FROM users WHERE role='admin' AND is_active=1"
+            ).fetchone()
+            if int((active_admins or {}).get("n") or 0) <= 1:
+                raise HTTPException(status_code=400, detail="cannot_remove_last_admin")
+
+        now = utcnow_iso()
+        conn.execute(
+            """
+            UPDATE users
+            SET
+                is_active=0,
+                stripe_subscription_id=NULL,
+                stripe_price_id=NULL,
+                subscription_status=NULL,
+                current_period_end=NULL,
+                cancel_at_period_end=0,
+                subscription_updated_at=?,
+                updated_at=?
+            WHERE user_id=?
+            """,
+            (now, now, target_id),
+        )
+
+    return {"ok": True, "user_id": target_id, "removed_at": now}
 
 
 # -----------------------------
@@ -823,6 +1336,7 @@ def list_tickers(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0, le=200000),
     q: Optional[str] = None,
+    sector: Optional[str] = None,
     sort_by: str = Query("last_filing_desc"),
     include_total: bool = Query(False),
     user: Dict[str, Any] = Depends(require_subscription),
@@ -844,6 +1358,7 @@ def list_tickers(
 
     qn = (q or "").strip()
     like = f"%{qn}%" if qn else None
+    sector_name = (sector or "").strip()
 
     sort_by = (sort_by or "last_filing_desc").strip().lower()
     if sort_by not in ("last_filing_desc", "ticker_asc", "sector_asc"):
@@ -884,6 +1399,9 @@ def list_tickers(
             if like is not None:
                 count_sql += " AND (im.current_ticker ILIKE ? OR im.issuer_name ILIKE ? OR im.issuer_cik ILIKE ? OR f.sector ILIKE ?)"
                 count_params.extend([like, like, like, like])
+            if sector_name:
+                count_sql += " AND f.sector = ?"
+                count_params.append(sector_name)
 
             r = conn.execute(count_sql, tuple(count_params)).fetchone()
             try:
@@ -912,6 +1430,10 @@ def list_tickers(
             sql += " AND (im.current_ticker ILIKE ? OR im.issuer_name ILIKE ? OR im.issuer_cik ILIKE ? OR f.sector ILIKE ?)"
             params.extend([like, like, like, like])
 
+        if sector_name:
+            sql += " AND f.sector = ?"
+            params.append(sector_name)
+
         sql += f"""
             {order_base}
             LIMIT ? OFFSET ?
@@ -920,7 +1442,13 @@ def list_tickers(
             SELECT
                 e.issuer_cik,
                 COUNT(*) FILTER (WHERE (e.has_buy=1 OR e.has_sell=1)) AS open_market_event_count,
-                COUNT(*) FILTER (WHERE (e.ai_buy_rating IS NOT NULL OR e.ai_sell_rating IS NOT NULL OR e.ai_confidence IS NOT NULL)) AS ai_event_count
+                COUNT(*) FILTER (WHERE (e.ai_buy_rating IS NOT NULL OR e.ai_sell_rating IS NOT NULL OR e.ai_confidence IS NOT NULL)) AS ai_event_count,
+                MAX(
+                    CASE
+                        WHEN e.ai_buy_rating IS NULL AND e.ai_sell_rating IS NULL THEN NULL
+                        ELSE GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1))
+                    END
+                ) AS best_event_ai_rating
             FROM insider_events e
             WHERE e.issuer_cik IN (SELECT issuer_cik FROM base)
             GROUP BY e.issuer_cik
@@ -940,6 +1468,7 @@ def list_tickers(
             b.last_filing_date,
             COALESCE(ec.open_market_event_count, 0) AS open_market_event_count,
             COALESCE(ec.ai_event_count, 0) AS ai_event_count,
+            ec.best_event_ai_rating,
             COALESCE(cc.cluster_event_count, 0) AS cluster_event_count,
             m.market_cap,
             m.market_cap_bucket,
@@ -966,6 +1495,7 @@ def list_tickers(
 
         return {
             "q": qn or None,
+            "sector": sector_name or None,
             "sort_by": sort_by,
             "offset": offset,
             "limit": limit,
@@ -1137,8 +1667,13 @@ def ticker_events(
             SELECT
               e.*,
               {best_ai_expr} AS best_ai_rating,
-              {best_ai_expr} AS ai_best
+              {best_ai_expr} AS ai_best,
+              im.issuer_name AS issuer_name,
+              f.sector AS sector,
+              f.beta AS beta
             FROM insider_events e
+            LEFT JOIN issuer_master im ON im.issuer_cik = e.issuer_cik
+            LEFT JOIN issuer_fundamentals_cache f ON f.ticker = e.ticker
             WHERE {where_sql}
             {order_sql}
             LIMIT ? OFFSET ?

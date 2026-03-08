@@ -74,6 +74,17 @@ export function fmtDollars(n?: number | null): string {
   });
 }
 
+export function fmtUsd(n?: number | null, opts?: { digits?: number }): string {
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  const digits = opts?.digits ?? 2;
+  return n.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
 export function fmtInt(n?: number | null): string {
   if (n === null || n === undefined || Number.isNaN(n)) return "—";
   return Math.round(n).toLocaleString();

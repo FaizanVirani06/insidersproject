@@ -5,10 +5,11 @@ import { Link } from "react-router-dom";
 import { useParams } from "react-router-dom";
 
 import type { EventDetail, PricePoint } from "@/lib/types";
-import { addDays, fmtAiRating, fmtDate, fmtDollars, fmtNumber, fmtPercent, minIsoDate } from "@/lib/format";
+import { addDays, fmtAiRating, fmtDate, fmtDollars, fmtNumber, fmtPercent, fmtUsd, minIsoDate } from "@/lib/format";
 import { PriceChart } from "@/components/price-chart";
 import { RegenerateAIButton } from "@/components/regenerate-ai-button";
 import { apiFetch } from "@/lib/api";
+import { getBestEventAiRating, getEventDisplaySides, getEventSideSummaries, type EventSide } from "@/lib/event-utils";
 
 export function EventDetailPage() {
   const params = useParams<{ issuer_cik: string; owner_key: string; accession_number: string }>();
@@ -93,6 +94,18 @@ export function EventDetailPage() {
     return Number.isFinite(x) ? `${x}%` : "—";
   };
 
+  const sideSummaries = getEventSideSummaries(e);
+  const eventSides = getEventDisplaySides(e);
+  const verdictSides: EventSide[] = eventSides.length > 0 ? eventSides : (["buy", "sell"] as EventSide[]);
+  const outcomes = Array.isArray(detail.outcomes)
+    ? detail.outcomes.filter((o: any) => {
+        const side = String(o?.side || "").toLowerCase();
+        return !eventSides.length || verdictSides.includes(side as EventSide);
+      })
+    : [];
+  const outcomesToShow = outcomes.length > 0 ? outcomes : detail.outcomes;
+  const bestEventAi = getBestEventAiRating(e);
+
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-3">
@@ -132,39 +145,75 @@ export function EventDetailPage() {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        <div className="glass-card p-4">
-          <div className="text-xs muted">Totals</div>
-          <div className="mt-2 text-sm">
-            <div>
-              <span className="muted">Buy</span> {fmtDollars(e.buy_dollars_total ?? null)}
-            </div>
-            <div>
-              <span className="muted">Sell</span> {fmtDollars(e.sell_dollars_total ?? null)}
-            </div>
-          </div>
-        </div>
+      <div className={["grid grid-cols-1 gap-3", sideSummaries.length > 1 ? "md:grid-cols-3" : "md:grid-cols-2"].join(" ")}>
+        {sideSummaries.length > 0 ? (
+          sideSummaries.map((summary) => (
+            <div
+              key={summary.side}
+              className={[
+                "glass-card p-4",
+                summary.side === "buy"
+                  ? "border-emerald-500/20 bg-emerald-500/5"
+                  : "border-amber-500/20 bg-amber-500/5",
+              ].join(" ")}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs muted">{summary.label} summary</div>
+                {summary.clusterFlag ? <span className="badge">Cluster</span> : null}
+              </div>
 
-        <div className="glass-card p-4">
-          <div className="text-xs muted">AI rating</div>
-          <div className="mt-2 text-sm">
-            <div>
-              <span className="muted">Buy</span> {fmtAiRating(e.ai_buy_rating ?? null)}
+              <div className="mt-3 space-y-2 text-sm">
+                {summary.dollars !== null ? (
+                  <div className="flex justify-between gap-3">
+                    <span className="muted">Value</span>
+                    <span className="font-medium">{fmtDollars(summary.dollars)}</span>
+                  </div>
+                ) : null}
+                {summary.shares !== null ? (
+                  <div className="flex justify-between gap-3">
+                    <span className="muted">Shares</span>
+                    <span className="font-medium">{fmtNumber(summary.shares, { digits: 0 })}</span>
+                  </div>
+                ) : null}
+                {summary.vwap !== null ? (
+                  <div className="flex justify-between gap-3">
+                    <span className="muted">Avg price</span>
+                    <span className="font-medium">{fmtUsd(summary.vwap)}</span>
+                  </div>
+                ) : null}
+                {summary.pctHoldingsChange !== null ? (
+                  <div className="flex justify-between gap-3">
+                    <span className="muted">Holding change</span>
+                    <span className="font-medium">{fmtPercent(summary.pctHoldingsChange, { digits: 1 })}</span>
+                  </div>
+                ) : null}
+                {summary.aiRating !== null ? (
+                  <div className="flex justify-between gap-3">
+                    <span className="muted">AI score</span>
+                    <span className="font-medium">{fmtAiRating(summary.aiRating)}</span>
+                  </div>
+                ) : null}
+                {summary.tradeDate ? (
+                  <div className="pt-1 text-xs muted">Trade date {fmtDate(summary.tradeDate)}</div>
+                ) : null}
+              </div>
             </div>
-            <div>
-              <span className="muted">Sell</span> {fmtAiRating(e.ai_sell_rating ?? null)}
-            </div>
-            <div className="mt-1 text-xs muted">Conf {confPct(e.ai_confidence ?? null)}</div>
+          ))
+        ) : (
+          <div className="glass-card p-4">
+            <div className="text-xs muted">Event overview</div>
+            <div className="mt-2 text-2xl font-semibold">{fmtAiRating(bestEventAi)}</div>
+            <div className="mt-1 text-xs muted">Best event AI • confidence {confPct(e.ai_confidence ?? null)}</div>
           </div>
-        </div>
+        )}
 
         <div className="glass-card p-4">
           <div className="text-xs muted">Outcomes</div>
           <div className="mt-2 space-y-1 text-sm">
-            {detail.outcomes.length === 0 ? (
+            {outcomesToShow.length === 0 ? (
               <div className="muted">Not computed.</div>
             ) : (
-              detail.outcomes.map((o: any) => (
+              outcomesToShow.map((o: any) => (
                 <div key={`${o.side}-${o.horizon_days}`} className="flex justify-between gap-3">
                   <div className="muted">
                     {String(o.side).toUpperCase()} +{o.horizon_days}d
@@ -265,33 +314,22 @@ export function EventDetailPage() {
           <div className="mt-2 text-sm muted">No AI verdict available.</div>
         ) : (
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div className="glass-card p-3">
-              <div className="text-sm font-semibold">Buy signal</div>
-              <div className="mt-2 text-sm">
-                Status: <span className="font-medium">{String(verdict.buy_signal?.status ?? "—")}</span>
-              </div>
-              <div className="mt-1 text-sm">
-                Score: <span className="font-medium">{fmtAiRating(verdict.buy_signal?.rating ?? null)}</span>
-                <span className="muted"> • conf {confPct(verdict.buy_signal?.confidence ?? null)}</span>
-              </div>
-              <div className="mt-2 text-sm">
-                {verdict.buy_signal?.summary || "—"}
-              </div>
-            </div>
-
-            <div className="glass-card p-3">
-              <div className="text-sm font-semibold">Sell signal</div>
-              <div className="mt-2 text-sm">
-                Status: <span className="font-medium">{String(verdict.sell_signal?.status ?? "—")}</span>
-              </div>
-              <div className="mt-1 text-sm">
-                Score: <span className="font-medium">{fmtAiRating(verdict.sell_signal?.rating ?? null)}</span>
-                <span className="muted"> • conf {confPct(verdict.sell_signal?.confidence ?? null)}</span>
-              </div>
-              <div className="mt-2 text-sm">
-                {verdict.sell_signal?.summary || "—"}
-              </div>
-            </div>
+            {verdictSides.map((side) => {
+              const signal = side === "buy" ? verdict.buy_signal : verdict.sell_signal;
+              return (
+                <div key={side} className="glass-card p-3">
+                  <div className="text-sm font-semibold">{side === "buy" ? "Buy signal" : "Sell signal"}</div>
+                  <div className="mt-2 text-sm">
+                    Status: <span className="font-medium">{String(signal?.status ?? "—")}</span>
+                  </div>
+                  <div className="mt-1 text-sm">
+                    Score: <span className="font-medium">{fmtAiRating(signal?.rating ?? null)}</span>
+                    <span className="muted"> • conf {confPct(signal?.confidence ?? null)}</span>
+                  </div>
+                  <div className="mt-2 text-sm">{signal?.summary || "—"}</div>
+                </div>
+              );
+            })}
 
             {/* Narrative */}
             <div className="glass-card p-3 md:col-span-2">
