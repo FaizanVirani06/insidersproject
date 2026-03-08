@@ -4,9 +4,18 @@ import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "@/components/auth-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 
-function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
+function NavLink({
+  to,
+  children,
+  exact = true,
+}: {
+  to: string;
+  children: React.ReactNode;
+  exact?: boolean;
+}) {
   const loc = useLocation();
-  const active = loc.pathname === to;
+  const active = exact ? loc.pathname === to : loc.pathname.startsWith(to);
+
   return (
     <Link
       to={to}
@@ -26,6 +35,8 @@ export function TopNav() {
   const loc = useLocation();
   const isApp = loc.pathname.startsWith("/app");
 
+  const isPaid = Boolean(user && (user.role === "admin" || user.is_paid));
+
   return (
     <header className="sticky top-0 z-50 border-b border-zinc-200/70 bg-white/50 backdrop-blur-xl dark:border-zinc-800/50 dark:bg-black/40">
       <div
@@ -36,7 +47,7 @@ export function TopNav() {
         }
       >
         <Link to="/" className="flex items-center gap-3">
-          <div className="text-lg font-bold tracking-tight">
+          <div className="text-lg font-semibold tracking-tight">
             <span className="bg-gradient-to-r from-purple-500 to-cyan-500 bg-clip-text text-transparent">
               InsidrsAI
             </span>
@@ -47,6 +58,9 @@ export function TopNav() {
         <nav className="hidden items-center gap-6 text-sm md:flex">
           <NavLink to="/pricing">Pricing</NavLink>
           <NavLink to="/legal">Legal</NavLink>
+          <NavLink to="/app" exact={false}>
+            App
+          </NavLink>
         </nav>
 
         <div className="flex items-center gap-2">
@@ -54,9 +68,22 @@ export function TopNav() {
 
           {user ? (
             <>
-              <Link to="/app" className="btn-secondary hidden sm:inline-flex">
-                Open app
-              </Link>
+              {user.role === "admin" ? (
+                <Link to="/app/admin/monitoring" className="btn-secondary hidden sm:inline-flex">
+                  Admin
+                </Link>
+              ) : null}
+
+              {isPaid ? (
+                <Link to="/app/tickers" className="btn-secondary hidden sm:inline-flex">
+                  Open app
+                </Link>
+              ) : (
+                <Link to="/pricing" className="btn-primary hidden sm:inline-flex">
+                  Subscribe
+                </Link>
+              )}
+
               <button type="button" onClick={() => logout()} className="btn-ghost">
                 Logout
               </button>
