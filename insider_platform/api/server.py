@@ -189,6 +189,12 @@ class UpdateCredentialsRequest(BaseModel):
     new_password: str | None = None
 
 
+class SiteBrandingUpdateRequest(BaseModel):
+    logo_mode: str | None = None
+    logo_text: str | None = None
+    logo_image_src: str | None = None
+
+
 DEFAULT_PROFILE_PREFERENCES: Dict[str, Any] = {
     "trade_side": "buy",
     "min_ai_rating": 7.0,
@@ -362,6 +368,96 @@ def _upsert_profile(conn: Any, user_id: int, payload: ProfileUpsertRequest) -> D
         ),
     )
     return _get_current_profile(conn, user_id)
+
+
+DEFAULT_SITE_BRANDING: Dict[str, Any] = {
+    "logo_mode": "text",
+    "logo_text": "InsidrsAI",
+    "logo_image_src": None,
+}
+
+
+def _get_site_branding(conn: Any) -> Dict[str, Any]:
+    logo_mode = str(get_app_config(conn, "site_logo_mode") or DEFAULT_SITE_BRANDING["logo_mode"]).strip().lower()
+    logo_text = str(get_app_config(conn, "site_logo_text") or DEFAULT_SITE_BRANDING["logo_text"]).strip() or str(
+        DEFAULT_SITE_BRANDING["logo_text"]
+    )
+    logo_image_src = str(get_app_config(conn, "site_logo_image_src") or "").strip() or None
+
+    if logo_mode not in ("text", "image"):
+        logo_mode = "text"
+    if logo_mode == "image" and not logo_image_src:
+        logo_mode = "text"
+
+    return {
+        "logo_mode": logo_mode,
+        "logo_text": logo_text,
+        "logo_image_src": logo_image_src,
+    }
+
+
+def _upsert_site_branding(conn: Any, payload: SiteBrandingUpdateRequest) -> Dict[str, Any]:
+    logo_mode = str(payload.logo_mode or DEFAULT_SITE_BRANDING["logo_mode"]).strip().lower()
+    if logo_mode not in ("text", "image"):
+        raise HTTPException(status_code=400, detail="invalid_logo_mode")
+
+    logo_text = str(payload.logo_text or DEFAULT_SITE_BRANDING["logo_text"]).strip() or str(DEFAULT_SITE_BRANDING["logo_text"])
+    if len(logo_text) > 80:
+        raise HTTPException(status_code=400, detail="logo_text_too_long")
+
+    logo_image_src = str(payload.logo_image_src or "").strip() or None
+    if logo_image_src is not None:
+        if not (
+            logo_image_src.startswith("data:image/")
+            or logo_image_src.startswith("https://")
+            or logo_image_src.startswith("http://")
+        ):
+            raise HTTPException(status_code=400, detail="invalid_logo_image_src")
+        if len(logo_image_src) > 500000:
+            raise HTTPException(status_code=400, detail="logo_image_too_large")
+
+    upsert_app_config(conn, "site_logo_mode", logo_mode)
+    upsert_app_config(conn, "site_logo_text", logo_text)
+    upsert_app_config(conn, "site_logo_image_src", logo_image_src or "")
+    return _get_site_branding(conn)
+
+
+def _sanitize_event_row_for_viewer(event: Dict[str, Any], *, is_admin: bool) -> Dict[str, Any]:
+    if is_admin:
+        return event
+
+    clean = dict(event)
+    for key in ("ai_model_id", "ai_prompt_version"):
+        clean.pop(key, None)
+    return clean
+
+
+def _sanitize_ai_latest_for_viewer(ai_latest: Dict[str, Any] | None, *, is_admin: bool) -> Dict[str, Any] | None:
+    if ai_latest is None:
+        return None
+    if is_admin:
+        return ai_latest
+
+    clean = dict(ai_latest)
+    for key in (
+        "ai_output_id",
+        "model_id",
+        "prompt_version",
+        "input_schema_version",
+        "output_schema_version",
+        "inputs_hash",
+        "input",
+    ):
+        clean.pop(key, None)
+
+    output = clean.get("output")
+    if isinstance(output, dict):
+        output_clean = dict(output)
+        for key in ("schema_version", "model_id", "prompt_version"):
+            output_clean.pop(key, None)
+        clean["output"] = output_clean
+
+    return clean
 
 
 @app.post("/auth/login")
@@ -619,7 +715,7 @@ def recommendations(
             (*params, page_limit, offset),
         ).fetchall()
 
-    events = [dict(r) for r in rows]
+    events = [_sanitize_event_row_for_viewer(dict(r), is_admin=bool(user.get("is_admin"))) for r in rows]
     has_next = len(events) > limit
     if has_next:
         events = events[:limit]
@@ -776,6 +872,23 @@ def admin_remove_user(
         )
 
     return {"ok": True, "user_id": target_id, "removed_at": now}
+
+
+@app.get("/public/site-branding")
+def public_site_branding() -> Dict[str, Any]:
+    with connect(cfg.DB_DSN) as conn:
+        branding = _get_site_branding(conn)
+    return {"branding": branding}
+
+
+@app.post("/admin/site/branding")
+def admin_update_site_branding(
+    payload: SiteBrandingUpdateRequest,
+    _admin: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    with connect(cfg.DB_DSN) as conn:
+        branding = _upsert_site_branding(conn, payload)
+    return {"ok": True, "branding": branding}
 
 
 # -----------------------------
@@ -1681,7 +1794,7 @@ def ticker_events(
             (*params, limit, offset),
         ).fetchall()
 
-        events = [dict(r) for r in rows]
+        events = [_sanitize_event_row_for_viewer(dict(r), is_admin=bool(user.get("is_admin"))) for r in rows]
         next_offset = offset + len(events)
         if len(events) < limit:
             next_offset = None
@@ -1798,7 +1911,7 @@ def list_events(
             (*params, limit, offset),
         ).fetchall()
 
-        events = [dict(r) for r in rows]
+        events = [_sanitize_event_row_for_viewer(dict(r), is_admin=bool(user.get("is_admin"))) for r in rows]
         next_offset = offset + len(events)
         if len(events) < limit:
             next_offset = None
@@ -1838,7 +1951,7 @@ def get_event(
         if row is None:
             raise HTTPException(status_code=404, detail="event_not_found")
 
-        event = dict(row)
+        event = _sanitize_event_row_for_viewer(dict(row), is_admin=bool(user.get("is_admin")))
 
         # Enforce open_market_only for non-admin users even on direct event access.
         # (Admins may browse non-open-market events.)
@@ -1919,7 +2032,7 @@ def get_event(
             d.pop("output_json", None)
             d.pop("input_json", None)
 
-            ai_latest = d
+            ai_latest = _sanitize_ai_latest_for_viewer(d, is_admin=bool(user.get("is_admin")))
 
         # Trade plan (technicals-only) for eligible BUY signals.
         trade_plan = None

@@ -2,18 +2,19 @@ import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import { useAuth } from "@/components/auth-provider";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { SiteBrandMark } from "@/components/site-brand-mark";
 
-function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
+function HeaderLink({ to, children }: { to: string; children: React.ReactNode }) {
   const loc = useLocation();
-  const active = loc.pathname === to;
+  const active = loc.pathname === to || (to === "/app" && loc.pathname.startsWith("/app"));
+
   return (
     <Link
       to={to}
       className={
         active
-          ? "text-zinc-900 dark:text-white"
-          : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"
+          ? "text-white"
+          : "text-zinc-400 transition-colors hover:text-white"
       }
     >
       {children}
@@ -27,7 +28,7 @@ export function TopNav() {
   const isApp = loc.pathname.startsWith("/app");
 
   return (
-    <header className="sticky top-0 z-50 border-b border-zinc-200/70 bg-white/50 backdrop-blur-xl dark:border-zinc-800/50 dark:bg-black/40">
+    <header className="sticky top-0 z-50 border-b border-zinc-800/50 bg-black/40 backdrop-blur-xl">
       <div
         className={
           isApp
@@ -36,41 +37,21 @@ export function TopNav() {
         }
       >
         <Link to="/" className="flex items-center gap-3">
-          <div className="text-lg font-bold tracking-tight">
-            <span className="bg-gradient-to-r from-purple-500 to-cyan-500 bg-clip-text text-transparent">
-              InsidrsAI
-            </span>
-          </div>
+          <SiteBrandMark textClassName="text-lg font-bold tracking-tight" imageClassName="h-8" />
           <span className="badge hidden sm:inline-flex">Beta</span>
         </Link>
 
         <nav className="hidden items-center gap-6 text-sm md:flex">
-          <NavLink to="/pricing">Pricing</NavLink>
-          <NavLink to="/legal">Legal</NavLink>
+          <HeaderLink to="/pricing">Pricing</HeaderLink>
+          <HeaderLink to="/app">App</HeaderLink>
         </nav>
 
         <div className="flex items-center gap-2">
-          <ThemeToggle />
-
           {user ? (
-            <>
-              <Link to="/app" className="btn-secondary hidden sm:inline-flex">
-                Open app
-              </Link>
-              <button type="button" onClick={() => logout()} className="btn-ghost">
-                Logout
-              </button>
-            </>
-          ) : (
-            <>
-              <Link to="/login" className="btn-ghost">
-                Log in
-              </Link>
-              <Link to="/signup" className="btn-primary">
-                Get started
-              </Link>
-            </>
-          )}
+            <button type="button" onClick={() => void logout()} className="btn-ghost">
+              Logout
+            </button>
+          ) : null}
         </div>
       </div>
     </header>

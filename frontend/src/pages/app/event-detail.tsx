@@ -1,18 +1,66 @@
-"use client";
-
 import * as React from "react";
-import { Link } from "react-router-dom";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
-import type { EventDetail, PricePoint } from "@/lib/types";
-import { addDays, fmtAiRating, fmtDate, fmtDollars, fmtNumber, fmtPercent, fmtUsd, minIsoDate } from "@/lib/format";
+import { AdminAiInputsPanel } from "@/components/admin-ai-inputs-panel";
 import { PriceChart } from "@/components/price-chart";
 import { RegenerateAIButton } from "@/components/regenerate-ai-button";
+import { useAuth } from "@/components/auth-provider";
 import { apiFetch } from "@/lib/api";
 import { getBestEventAiRating, getEventDisplaySides, getEventSideSummaries, type EventSide } from "@/lib/event-utils";
+import { addDays, fmtAiRating, fmtDate, fmtDollars, fmtNumber, fmtPercent, fmtUsd, minIsoDate } from "@/lib/format";
+import type { EventDetail, PricePoint } from "@/lib/types";
+
+function toNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function hasText(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function confidenceText(value: unknown): string | null {
+  const n = toNumber(value);
+  if (n === null) return null;
+  return `${Math.round(n * 100)}%`;
+}
+
+function signalHasContent(signal: any): boolean {
+  if (!signal || typeof signal !== "object") return false;
+  return (
+    hasText(signal.status) ||
+    hasText(signal.summary) ||
+    toNumber(signal.rating) !== null ||
+    toNumber(signal.confidence) !== null
+  );
+}
+
+function narrativeItems(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+        .map((item) => String(item ?? "").trim())
+        .filter(Boolean)
+        .slice(0, 8)
+    : [];
+}
+
+function tradePlanHasUsefulContent(plan: any): boolean {
+  if (!plan || !plan.eligible) return false;
+  const trims = Array.isArray(plan.trims) ? plan.trims.filter((item: any) => item && toNumber(item?.price) !== null) : [];
+  return Boolean(
+    toNumber(plan.entry?.price) !== null ||
+      toNumber(plan.stop_loss?.price) !== null ||
+      toNumber(plan.take_profit?.price) !== null ||
+      trims.length > 0 ||
+      (Array.isArray(plan.notes) && plan.notes.some((note: unknown) => String(note ?? "").trim()))
+  );
+}
 
 export function EventDetailPage() {
   const params = useParams<{ issuer_cik: string; owner_key: string; accession_number: string }>();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
 
   const issuerCik = decodeURIComponent(String(params?.issuer_cik ?? ""));
   const ownerKey = decodeURIComponent(String(params?.owner_key ?? ""));
@@ -25,38 +73,40 @@ export function EventDetailPage() {
 
   React.useEffect(() => {
     let cancelled = false;
+
     (async () => {
       setLoading(true);
       setError(null);
+
       try {
         const res = await apiFetch(
-          `/api/backend/event/${encodeURIComponent(issuerCik)}/${encodeURIComponent(ownerKey)}/${encodeURIComponent(accession)}`,
+          `/event/${encodeURIComponent(issuerCik)}/${encodeURIComponent(ownerKey)}/${encodeURIComponent(accession)}`,
           { cache: "no-store" }
         );
         if (!res.ok) throw new Error(await res.text());
+
         const data = (await res.json()) as EventDetail;
         if (cancelled) return;
         setDetail(data);
 
-        // Price chart: request a 1y window around the event.
-        const e = data.event;
-        const anchor = (e.event_trade_date || e.filing_date || "").slice(0, 10);
+        const event = data.event;
+        const anchor = (event.event_trade_date || event.filing_date || "").slice(0, 10);
         const today = new Date().toISOString().slice(0, 10);
-        if (e.ticker && anchor) {
+
+        if (event.ticker && anchor) {
           const start = addDays(anchor, -365);
           const end = minIsoDate(addDays(anchor, 365), today);
-
-          const pres = await apiFetch(
-            `/api/backend/ticker/${encodeURIComponent(e.ticker)}/prices?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&limit=5000`,
+          const priceRes = await apiFetch(
+            `/ticker/${encodeURIComponent(event.ticker)}/prices?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&limit=5000`,
             { cache: "no-store" }
           );
-          if (pres.ok) {
-            const p = await pres.json();
-            if (!cancelled) setPrices((p?.prices ?? []) as PricePoint[]);
+          if (priceRes.ok) {
+            const json = await priceRes.json();
+            if (!cancelled) setPrices((json?.prices ?? []) as PricePoint[]);
           }
         }
       } catch (e: any) {
-        if (!cancelled) setError(e?.message || "Failed to load event");
+        if (!cancelled) setError(e?.message || "Failed to load event.");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -83,28 +133,198 @@ export function EventDetailPage() {
     return <div className="text-sm muted">No data.</div>;
   }
 
-  const e = detail.event;
-  const verdict = detail.ai_latest?.output?.verdict;
+  const event = detail.event;
+  const bestEventAi = getBestEventAiRating(event);
+  const sideSummaries = getEventSideSummaries(event);
+  const eventSides = getEventDisplaySides(event);
+  const visibleSides: EventSide[] = eventSides.length > 0 ? eventSides : (["buy", "sell"] as EventSide[]);
+  const aiOutput = detail.ai_latest?.output ?? null;
+  const verdict = aiOutput?.verdict ?? null;
   const tradePlan = (detail as any).trade_plan as any | null | undefined;
-  const tradePlanEligible = Boolean(tradePlan && tradePlan.eligible);
+  const showTradePlan = tradePlanHasUsefulContent(tradePlan);
 
-  const confPct = (c?: number | null) => {
-    if (c === null || c === undefined || Number.isNaN(c)) return "—";
-    const x = Math.round(Number(c) * 100);
-    return Number.isFinite(x) ? `${x}%` : "—";
-  };
-
-  const sideSummaries = getEventSideSummaries(e);
-  const eventSides = getEventDisplaySides(e);
-  const verdictSides: EventSide[] = eventSides.length > 0 ? eventSides : (["buy", "sell"] as EventSide[]);
-  const outcomes = Array.isArray(detail.outcomes)
-    ? detail.outcomes.filter((o: any) => {
-        const side = String(o?.side || "").toLowerCase();
-        return !eventSides.length || verdictSides.includes(side as EventSide);
+  const filteredOutcomes = Array.isArray(detail.outcomes)
+    ? detail.outcomes.filter((item: any) => {
+        const side = String(item?.side || "").toLowerCase();
+        const horizon = toNumber(item?.horizon_days);
+        const returnValue = toNumber(item?.return);
+        return (
+          Boolean(side) &&
+          visibleSides.includes(side as EventSide) &&
+          horizon !== null &&
+          returnValue !== null
+        );
       })
     : [];
-  const outcomesToShow = outcomes.length > 0 ? outcomes : detail.outcomes;
-  const bestEventAi = getBestEventAiRating(e);
+
+  const signalCards = verdict
+    ? visibleSides
+        .map((side) => {
+          const signal = side === "buy" ? verdict.buy_signal : verdict.sell_signal;
+          if (!signalHasContent(signal)) return null;
+          return { side, signal };
+        })
+        .filter(Boolean) as Array<{ side: EventSide; signal: any }>
+    : [];
+
+  const narrativeSections = [
+    { title: "Thesis", items: narrativeItems(aiOutput?.narrative?.thesis_bullets) },
+    { title: "Context", items: narrativeItems(aiOutput?.narrative?.context_bullets) },
+    { title: "Counterpoints", items: narrativeItems(aiOutput?.narrative?.counterpoints_bullets) },
+  ].filter((section) => section.items.length > 0);
+
+  const showAiExplanation = signalCards.length > 0 || narrativeSections.length > 0;
+
+  const summaryCards: React.ReactNode[] = [];
+
+  if (sideSummaries.length > 0) {
+    for (const summary of sideSummaries) {
+      summaryCards.push(
+        <div
+          key={summary.side}
+          className={[
+            "glass-card p-4",
+            summary.side === "buy" ? "border-emerald-500/20 bg-emerald-500/5" : "border-amber-500/20 bg-amber-500/5",
+          ].join(" ")}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs muted">{summary.label} summary</div>
+            {summary.clusterFlag ? <span className="badge">Cluster</span> : null}
+          </div>
+
+          <div className="mt-3 space-y-2 text-sm">
+            {summary.dollars !== null ? (
+              <div className="flex justify-between gap-3">
+                <span className="muted">Value</span>
+                <span className="font-medium">{fmtDollars(summary.dollars)}</span>
+              </div>
+            ) : null}
+            {summary.shares !== null ? (
+              <div className="flex justify-between gap-3">
+                <span className="muted">Shares</span>
+                <span className="font-medium">{fmtNumber(summary.shares, { digits: 0 })}</span>
+              </div>
+            ) : null}
+            {summary.vwap !== null ? (
+              <div className="flex justify-between gap-3">
+                <span className="muted">Average price</span>
+                <span className="font-medium">{fmtUsd(summary.vwap)}</span>
+              </div>
+            ) : null}
+            {summary.pctHoldingsChange !== null ? (
+              <div className="flex justify-between gap-3">
+                <span className="muted">Holding change</span>
+                <span className="font-medium">{summary.pctHoldingsChange.toFixed(1)}%</span>
+              </div>
+            ) : null}
+            {summary.aiRating !== null ? (
+              <div className="flex justify-between gap-3">
+                <span className="muted">AI score</span>
+                <span className="font-medium">{fmtAiRating(summary.aiRating)}</span>
+              </div>
+            ) : null}
+            {summary.tradeDate ? <div className="pt-1 text-xs muted">Trade date {fmtDate(summary.tradeDate)}</div> : null}
+          </div>
+        </div>
+      );
+    }
+  } else {
+    summaryCards.push(
+      <div key="overview" className="glass-card p-4">
+        <div className="text-xs muted">Event overview</div>
+        <div className="mt-2 text-2xl font-semibold">{fmtAiRating(bestEventAi)}</div>
+        <div className="mt-1 text-xs muted">
+          Best event AI
+          {confidenceText(event.ai_confidence) ? ` • confidence ${confidenceText(event.ai_confidence)}` : ""}
+        </div>
+      </div>
+    );
+  }
+
+  if (filteredOutcomes.length > 0) {
+    summaryCards.push(
+      <div key="outcomes" className="glass-card p-4">
+        <div className="text-xs muted">Outcomes</div>
+        <div className="mt-3 space-y-2 text-sm">
+          {filteredOutcomes.map((item: any) => (
+            <div key={`${item.side}-${item.horizon_days}`} className="flex justify-between gap-3">
+              <div className="muted">
+                {String(item.side).toUpperCase()} +{Math.round(Number(item.horizon_days))}d
+              </div>
+              <div className="font-medium">{fmtPercent(Number(item.return), { digits: 1 })}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const tradePlanCards: React.ReactNode[] = [];
+  const trimTargets = Array.isArray(tradePlan?.trims)
+    ? tradePlan.trims.filter((target: any) => target && toNumber(target?.price) !== null).slice(0, 4)
+    : [];
+
+  if (toNumber(tradePlan?.entry?.price) !== null) {
+    tradePlanCards.push(
+      <div key="entry" className="glass-card p-3">
+        <div className="text-xs muted">Entry</div>
+        <div className="mt-1 text-sm">
+          <span className="font-medium">{fmtDollars(tradePlan.entry.price)}</span>
+          {tradePlan.entry?.date ? <span className="muted"> • {fmtDate(tradePlan.entry.date)}</span> : null}
+        </div>
+        {tradePlan.entry?.source ? <div className="mt-1 text-xs muted">Source: {tradePlan.entry.source}</div> : null}
+      </div>
+    );
+  }
+
+  if (toNumber(tradePlan?.stop_loss?.price) !== null) {
+    tradePlanCards.push(
+      <div key="stop" className="glass-card p-3">
+        <div className="text-xs muted">Stop loss</div>
+        <div className="mt-1 text-sm">
+          <span className="font-medium">{fmtDollars(tradePlan.stop_loss.price)}</span>
+          {toNumber(tradePlan?.risk?.pct) !== null ? (
+            <span className="muted"> • risk {tradePlan.risk.pct}%</span>
+          ) : null}
+        </div>
+        {tradePlan.stop_loss?.basis ? <div className="mt-1 text-xs muted">Basis: {tradePlan.stop_loss.basis}</div> : null}
+      </div>
+    );
+  }
+
+  if (trimTargets.length > 0) {
+    tradePlanCards.push(
+      <div key="trims" className="glass-card p-3">
+        <div className="text-xs muted">Trim targets</div>
+        <div className="mt-2 space-y-1 text-sm">
+          {trimTargets.map((target: any, index: number) => (
+            <div key={index} className="flex items-center justify-between gap-3">
+              <div className="font-medium">{fmtDollars(target.price)}</div>
+              <div className="text-xs muted">{target.basis || "—"}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (toNumber(tradePlan?.take_profit?.price) !== null) {
+    tradePlanCards.push(
+      <div key="take-profit" className="glass-card p-3">
+        <div className="text-xs muted">Take profit</div>
+        <div className="mt-1 text-sm">
+          <span className="font-medium">{fmtDollars(tradePlan.take_profit.price)}</span>
+        </div>
+        {tradePlan.take_profit?.basis ? (
+          <div className="mt-1 text-xs muted">Basis: {tradePlan.take_profit.basis}</div>
+        ) : null}
+      </div>
+    );
+  }
+
+  const tradePlanNotes = Array.isArray(tradePlan?.notes)
+    ? tradePlan.notes.map((note: unknown) => String(note ?? "").trim()).filter(Boolean).slice(0, 8)
+    : [];
 
   return (
     <div className="space-y-4">
@@ -112,122 +332,44 @@ export function EventDetailPage() {
         <div>
           <h1 className="text-2xl font-semibold">Event</h1>
           <div className="mt-1 text-sm muted">
-            {e.ticker ? `${e.ticker} • ` : ""}
-            {e.owner_name_display || ownerKey}
+            {event.ticker ? `${event.ticker} • ` : ""}
+            {event.owner_name_display || ownerKey}
             <span className="mx-2">•</span>
-            Filing {fmtDate(e.filing_date)}
-            {e.event_trade_date ? (
+            Filing {fmtDate(event.filing_date)}
+            {event.event_trade_date ? (
               <>
                 <span className="mx-2">•</span>
-                Trade {fmtDate(e.event_trade_date)}
+                Trade {fmtDate(event.event_trade_date)}
               </>
             ) : null}
           </div>
         </div>
 
-        <Link
-          to={`/app/ticker/${encodeURIComponent(e.ticker || "")}`}
-          className="btn-secondary"
-        >
+        <Link to={`/app/ticker/${encodeURIComponent(event.ticker || "")}`} className="btn-secondary">
           Back to ticker
         </Link>
       </div>
 
-      {/* Chart */}
       <div className="glass-card p-4">
         <div className="flex items-center justify-between">
           <div className="text-sm font-semibold">Price chart</div>
           <div className="text-xs muted">Adj close</div>
         </div>
         <div className="mt-3">
-          <PriceChart data={prices} tradeDate={e.event_trade_date} filingDate={e.filing_date} />
+          <PriceChart data={prices} tradeDate={event.event_trade_date} filingDate={event.filing_date} />
         </div>
       </div>
 
-      {/* Summary cards */}
-      <div className={["grid grid-cols-1 gap-3", sideSummaries.length > 1 ? "md:grid-cols-3" : "md:grid-cols-2"].join(" ")}>
-        {sideSummaries.length > 0 ? (
-          sideSummaries.map((summary) => (
-            <div
-              key={summary.side}
-              className={[
-                "glass-card p-4",
-                summary.side === "buy"
-                  ? "border-emerald-500/20 bg-emerald-500/5"
-                  : "border-amber-500/20 bg-amber-500/5",
-              ].join(" ")}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-xs muted">{summary.label} summary</div>
-                {summary.clusterFlag ? <span className="badge">Cluster</span> : null}
-              </div>
-
-              <div className="mt-3 space-y-2 text-sm">
-                {summary.dollars !== null ? (
-                  <div className="flex justify-between gap-3">
-                    <span className="muted">Value</span>
-                    <span className="font-medium">{fmtDollars(summary.dollars)}</span>
-                  </div>
-                ) : null}
-                {summary.shares !== null ? (
-                  <div className="flex justify-between gap-3">
-                    <span className="muted">Shares</span>
-                    <span className="font-medium">{fmtNumber(summary.shares, { digits: 0 })}</span>
-                  </div>
-                ) : null}
-                {summary.vwap !== null ? (
-                  <div className="flex justify-between gap-3">
-                    <span className="muted">Avg price</span>
-                    <span className="font-medium">{fmtUsd(summary.vwap)}</span>
-                  </div>
-                ) : null}
-                {summary.pctHoldingsChange !== null ? (
-                  <div className="flex justify-between gap-3">
-                    <span className="muted">Holding change</span>
-                    <span className="font-medium">{fmtPercent(summary.pctHoldingsChange, { digits: 1 })}</span>
-                  </div>
-                ) : null}
-                {summary.aiRating !== null ? (
-                  <div className="flex justify-between gap-3">
-                    <span className="muted">AI score</span>
-                    <span className="font-medium">{fmtAiRating(summary.aiRating)}</span>
-                  </div>
-                ) : null}
-                {summary.tradeDate ? (
-                  <div className="pt-1 text-xs muted">Trade date {fmtDate(summary.tradeDate)}</div>
-                ) : null}
-              </div>
-            </div>
-          ))
-        ) : (
-          <div className="glass-card p-4">
-            <div className="text-xs muted">Event overview</div>
-            <div className="mt-2 text-2xl font-semibold">{fmtAiRating(bestEventAi)}</div>
-            <div className="mt-1 text-xs muted">Best event AI • confidence {confPct(e.ai_confidence ?? null)}</div>
-          </div>
-        )}
-
-        <div className="glass-card p-4">
-          <div className="text-xs muted">Outcomes</div>
-          <div className="mt-2 space-y-1 text-sm">
-            {outcomesToShow.length === 0 ? (
-              <div className="muted">Not computed.</div>
-            ) : (
-              outcomesToShow.map((o: any) => (
-                <div key={`${o.side}-${o.horizon_days}`} className="flex justify-between gap-3">
-                  <div className="muted">
-                    {String(o.side).toUpperCase()} +{o.horizon_days}d
-                  </div>
-                  <div className="font-medium">{fmtPercent(o.return, { digits: 1 })}</div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+      <div
+        className={[
+          "grid grid-cols-1 gap-3",
+          summaryCards.length >= 3 ? "xl:grid-cols-3" : summaryCards.length === 2 ? "md:grid-cols-2" : "grid-cols-1",
+        ].join(" ")}
+      >
+        {summaryCards}
       </div>
 
-      {/* Trade plan */}
-      {tradePlan && (
+      {showTradePlan ? (
         <div className="glass-card p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -237,161 +379,104 @@ export function EventDetailPage() {
             <span className="badge">Technicals</span>
           </div>
 
-          {!tradePlanEligible ? (
-            <div className="mt-3 text-sm muted">{tradePlan.reason || "Trade plan not available for this event."}</div>
-          ) : (
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <div className="glass-card p-3">
-                <div className="text-xs muted">Entry</div>
-                <div className="mt-1 text-sm">
-                  <span className="font-medium">{fmtDollars(tradePlan.entry?.price ?? null)}</span>
-                  <span className="muted"> • {fmtDate(tradePlan.entry?.date)}</span>
-                </div>
-                <div className="mt-1 text-xs muted">Source: {tradePlan.entry?.source || "—"}</div>
-              </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">{tradePlanCards}</div>
 
-              <div className="glass-card p-3">
-                <div className="text-xs muted">Stop loss</div>
-                <div className="mt-1 text-sm">
-                  <span className="font-medium">{fmtDollars(tradePlan.stop_loss?.price ?? null)}</span>
-                  {tradePlan.risk?.pct != null ? <span className="muted"> • risk {tradePlan.risk.pct}%</span> : null}
-                </div>
-                <div className="mt-1 text-xs muted">Basis: {tradePlan.stop_loss?.basis || "—"}</div>
-              </div>
+          {tradePlanNotes.length > 0 ? (
+            <div className="mt-3 glass-card p-3">
+              <div className="text-xs font-semibold muted">Notes</div>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm muted">
+                {tradePlanNotes.map((note: string) => (
+                  <li key={note}>{note}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
-              <div className="glass-card p-3">
-                <div className="text-xs muted">Trim targets</div>
-                <div className="mt-2 space-y-1 text-sm">
-                  {(tradePlan.trims || []).slice(0, 4).map((t: any, idx: number) => (
-                    <div key={idx} className="flex items-center justify-between gap-3">
-                      <div className="font-medium">{fmtDollars(t.price ?? null)}</div>
-                      <div className="text-xs muted">{t.basis || "—"}</div>
+      {showAiExplanation ? (
+        <div className="glass-card p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">AI explanation</div>
+              <div className="text-xs muted">
+                {isAdmin && detail.ai_latest?.model_id
+                  ? `${detail.ai_latest.model_id}${detail.ai_latest.prompt_version ? ` • ${detail.ai_latest.prompt_version}` : ""}`
+                  : "Event-level AI summary"}
+              </div>
+            </div>
+
+            <RegenerateAIButton issuer_cik={issuerCik} owner_key={ownerKey} accession_number={accession} />
+          </div>
+
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+            {signalCards.map(({ side, signal }) => (
+              <div key={side} className="glass-card p-3">
+                <div className="text-sm font-semibold">{side === "buy" ? "Buy signal" : "Sell signal"}</div>
+
+                {hasText(signal?.status) ? (
+                  <div className="mt-2 text-sm">
+                    Status: <span className="font-medium">{String(signal.status)}</span>
+                  </div>
+                ) : null}
+
+                {toNumber(signal?.rating) !== null || toNumber(signal?.confidence) !== null ? (
+                  <div className="mt-1 text-sm">
+                    {toNumber(signal?.rating) !== null ? (
+                      <>
+                        Score: <span className="font-medium">{fmtAiRating(signal.rating)}</span>
+                      </>
+                    ) : null}
+                    {confidenceText(signal?.confidence) ? (
+                      <span className="muted">
+                        {toNumber(signal?.rating) !== null ? " • " : ""}
+                        confidence {confidenceText(signal.confidence)}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {hasText(signal?.summary) ? <div className="mt-2 text-sm">{String(signal.summary)}</div> : null}
+              </div>
+            ))}
+
+            {narrativeSections.length > 0 ? (
+              <div className="glass-card p-3 md:col-span-2">
+                <div className="text-sm font-semibold">Narrative</div>
+                <div
+                  className={[
+                    "mt-3 grid gap-4",
+                    narrativeSections.length === 1 ? "grid-cols-1" : narrativeSections.length === 2 ? "md:grid-cols-2" : "md:grid-cols-3",
+                  ].join(" ")}
+                >
+                  {narrativeSections.map((section) => (
+                    <div key={section.title}>
+                      <div className="text-xs font-semibold muted">{section.title}</div>
+                      <ul className="mt-1 list-disc space-y-1 pl-5 text-sm muted">
+                        {section.items.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
                     </div>
                   ))}
-                  {(tradePlan.trims || []).length === 0 && <div className="muted">—</div>}
                 </div>
               </div>
-
-              <div className="glass-card p-3">
-                <div className="text-xs muted">Take profit</div>
-                <div className="mt-1 text-sm">
-                  <span className="font-medium">{fmtDollars(tradePlan.take_profit?.price ?? null)}</span>
-                </div>
-                <div className="mt-1 text-xs muted">Basis: {tradePlan.take_profit?.basis || "—"}</div>
-              </div>
-
-              {Array.isArray(tradePlan.notes) && tradePlan.notes.length > 0 && (
-                <div className="glass-card p-3 md:col-span-2">
-                  <div className="text-xs font-semibold muted">Notes</div>
-                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm muted">
-                    {tradePlan.notes.slice(0, 8).map((n: any, idx: number) => (
-                      <li key={idx}>{String(n)}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* AI Panel */}
-      <div className="glass-card p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold">AI explanation</div>
-            <div className="text-xs muted">
-              {detail.ai_latest?.model_id
-                ? `${detail.ai_latest.model_id} • ${detail.ai_latest.prompt_version}`
-                : "No AI output"}
-            </div>
+            ) : null}
           </div>
-
-          <RegenerateAIButton issuer_cik={issuerCik} owner_key={ownerKey} accession_number={accession} />
         </div>
+      ) : null}
 
-        {!verdict ? (
-          <div className="mt-2 text-sm muted">No AI verdict available.</div>
-        ) : (
-          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-            {verdictSides.map((side) => {
-              const signal = side === "buy" ? verdict.buy_signal : verdict.sell_signal;
-              return (
-                <div key={side} className="glass-card p-3">
-                  <div className="text-sm font-semibold">{side === "buy" ? "Buy signal" : "Sell signal"}</div>
-                  <div className="mt-2 text-sm">
-                    Status: <span className="font-medium">{String(signal?.status ?? "—")}</span>
-                  </div>
-                  <div className="mt-1 text-sm">
-                    Score: <span className="font-medium">{fmtAiRating(signal?.rating ?? null)}</span>
-                    <span className="muted"> • conf {confPct(signal?.confidence ?? null)}</span>
-                  </div>
-                  <div className="mt-2 text-sm">{signal?.summary || "—"}</div>
-                </div>
-              );
-            })}
-
-            {/* Narrative */}
-            <div className="glass-card p-3 md:col-span-2">
-              <div className="text-sm font-semibold">Narrative</div>
-              <div className="mt-3 grid gap-4 md:grid-cols-3">
-                <div>
-                  <div className="text-xs font-semibold muted">Thesis</div>
-                  <ul className="mt-1 list-disc space-y-1 pl-5 text-sm muted">
-                    {(detail.ai_latest?.output?.narrative?.thesis_bullets ?? []).slice(0, 8).map((p: any, idx: number) => (
-                      <li key={idx}>{String(p)}</li>
-                    ))}
-                    {(detail.ai_latest?.output?.narrative?.thesis_bullets ?? []).length === 0 && <li>—</li>}
-                  </ul>
-                </div>
-
-                <div>
-                  <div className="text-xs font-semibold muted">Context</div>
-                  <ul className="mt-1 list-disc space-y-1 pl-5 text-sm muted">
-                    {(detail.ai_latest?.output?.narrative?.context_bullets ?? []).slice(0, 8).map((p: any, idx: number) => (
-                      <li key={idx}>{String(p)}</li>
-                    ))}
-                    {(detail.ai_latest?.output?.narrative?.context_bullets ?? []).length === 0 && <li>—</li>}
-                  </ul>
-                </div>
-
-                <div>
-                  <div className="text-xs font-semibold muted">Counterpoints</div>
-                  <ul className="mt-1 list-disc space-y-1 pl-5 text-sm muted">
-                    {(detail.ai_latest?.output?.narrative?.counterpoints_bullets ?? []).slice(0, 8).map((p: any, idx: number) => (
-                      <li key={idx}>{String(p)}</li>
-                    ))}
-                    {(detail.ai_latest?.output?.narrative?.counterpoints_bullets ?? []).length === 0 && <li>—</li>}
-                  </ul>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* AI inputs (exactly what we send to the model) */}
-      {detail.ai_latest?.input && (
+      {isAdmin && detail.ai_latest?.input ? (
         <div className="glass-card p-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold">AI inputs</div>
-              <div className="text-xs muted">
-                Included so users can verify how the AI reached its conclusion.
-              </div>
-            </div>
+          <div className="mb-4">
+            <div className="text-sm font-semibold">AI inputs</div>
+            <div className="text-xs muted">Admin-only structured view of the exact data package used for this run.</div>
           </div>
-          <details className="mt-3">
-            <summary className="cursor-pointer text-sm muted">Show JSON</summary>
-            <pre className="mt-2 max-h-[600px] overflow-auto rounded bg-black/5 p-3 text-xs leading-relaxed dark:bg-white/5">
-              {JSON.stringify(detail.ai_latest.input, null, 2)}
-            </pre>
-          </details>
+          <AdminAiInputsPanel input={detail.ai_latest.input} />
         </div>
-      )}
+      ) : null}
 
-      {/* Raw Form 4 rows */}
-      {Array.isArray(detail.rows) && detail.rows.length > 0 && (
+      {Array.isArray(detail.rows) && detail.rows.length > 0 ? (
         <div className="glass-card p-4">
           <div className="text-sm font-semibold">Raw Form 4 rows ({detail.rows.length})</div>
           <div className="mt-3 overflow-x-auto">
@@ -408,23 +493,33 @@ export function EventDetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {detail.rows.map((r: any, idx: number) => {
+                {detail.rows.map((row: any, index: number) => {
                   const warnings = (() => {
                     try {
-                      const w = typeof r.parser_warnings_json === "string" ? JSON.parse(r.parser_warnings_json) : r.parser_warnings_json;
-                      return Array.isArray(w) ? w.join("; ") : "";
+                      const parsed =
+                        typeof row.parser_warnings_json === "string"
+                          ? JSON.parse(row.parser_warnings_json)
+                          : row.parser_warnings_json;
+                      return Array.isArray(parsed) ? parsed.join("; ") : "";
                     } catch {
-                      return String(r.parser_warnings_json ?? "");
+                      return String(row.parser_warnings_json ?? "");
                     }
                   })();
+
                   return (
-                    <tr key={idx} className="border-b last:border-b-0">
-                      <td className="p-2 whitespace-nowrap">{r.transaction_date ?? "—"}</td>
-                      <td className="p-2 whitespace-nowrap">{r.transaction_code ?? "—"}</td>
-                      <td className="p-2 whitespace-nowrap">{r.is_derivative ? "Yes" : "No"}</td>
-                      <td className="p-2 whitespace-nowrap">{typeof r.shares_abs === "number" ? fmtNumber(r.shares_abs) : "—"}</td>
-                      <td className="p-2 whitespace-nowrap">{typeof r.price === "number" ? fmtDollars(r.price) : "—"}</td>
-                      <td className="p-2 whitespace-nowrap">{typeof r.shares_owned_following === "number" ? fmtNumber(r.shares_owned_following) : "—"}</td>
+                    <tr key={index} className="border-b last:border-b-0">
+                      <td className="p-2 whitespace-nowrap">{row.transaction_date ?? "—"}</td>
+                      <td className="p-2 whitespace-nowrap">{row.transaction_code ?? "—"}</td>
+                      <td className="p-2 whitespace-nowrap">{row.is_derivative ? "Yes" : "No"}</td>
+                      <td className="p-2 whitespace-nowrap">
+                        {typeof row.shares_abs === "number" ? fmtNumber(row.shares_abs) : "—"}
+                      </td>
+                      <td className="p-2 whitespace-nowrap">
+                        {typeof row.price === "number" ? fmtDollars(row.price) : "—"}
+                      </td>
+                      <td className="p-2 whitespace-nowrap">
+                        {typeof row.shares_owned_following === "number" ? fmtNumber(row.shares_owned_following) : "—"}
+                      </td>
                       <td className="p-2">{warnings || "—"}</td>
                     </tr>
                   );
@@ -433,9 +528,8 @@ export function EventDetailPage() {
             </table>
           </div>
         </div>
-      )}
+      ) : null}
 
-      {/* Raw keys */}
       <div className="glass-card p-4 text-xs muted">
         <div>
           <span className="font-medium">issuer_cik</span>: {issuerCik}
