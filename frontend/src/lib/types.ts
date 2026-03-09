@@ -1,8 +1,10 @@
 export type User = {
   user_id: number;
   username: string;
-  role: "admin" | "user";
+  role: "admin" | "showcase" | "user";
   is_admin?: boolean;
+  is_showcase?: boolean;
+  can_view_admin?: boolean;
   subscription_status?: string | null;
   stripe_customer_id?: string | null;
   current_period_end?: string | null;

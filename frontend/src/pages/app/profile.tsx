@@ -18,7 +18,7 @@ type UpdateCredentialsResponse = {
   user: {
     user_id: number;
     username: string;
-    role: "admin" | "user";
+    role: "admin" | "showcase" | "user";
     subscription_status?: string | null;
     is_paid?: boolean;
     is_admin?: boolean;
@@ -43,6 +43,8 @@ function prettyDetail(detail: string | null | undefined): string {
       return "New password must be at least 8 characters.";
     case "no_credential_changes_requested":
       return "Change the login email or enter a new password before saving.";
+    case "showcase_read_only":
+      return "Spectator mode is read-only. This account cannot save changes.";
     case "invalid_trade_side":
       return "Trade side must be buys, sells, or both.";
     case "invalid_min_ai_rating":
@@ -179,6 +181,7 @@ function SectorButton({
 
 export function ProfilePage() {
   const { user, refresh } = useAuth();
+  const isShowcase = user?.role === "showcase";
 
   const [loading, setLoading] = React.useState(false);
   const [savingProfile, setSavingProfile] = React.useState(false);
@@ -393,11 +396,17 @@ export function ProfilePage() {
             <button type="button" className="btn-secondary h-10 px-4" onClick={() => void load()} disabled={loading}>
               {loading ? "Reloading…" : "Reload"}
             </button>
-            <button type="button" className="btn-primary h-10 px-5" onClick={() => void saveProfile()} disabled={loading || savingProfile}>
+            <button type="button" className="btn-primary h-10 px-5" onClick={() => void saveProfile()} disabled={isShowcase || loading || savingProfile}>
               {savingProfile ? "Saving…" : "Save profile"}
             </button>
           </div>
         </div>
+
+        {isShowcase ? (
+          <div className="mt-4 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-700 dark:text-cyan-300">
+            Spectator mode is active. You can explore the profile and recommendation settings, but saving changes is disabled.
+          </div>
+        ) : null}
 
         <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <SummaryCard label="Login email" value={user?.username || "—"} helper="Used when signing in" />
@@ -424,7 +433,7 @@ export function ProfilePage() {
         </div>
       ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-2">
+      <fieldset disabled={isShowcase} className="grid gap-6 xl:grid-cols-2 disabled:opacity-70">
         <SectionCard title="Contact information" subtitle="Used for account communication and alerts if you enable them.">
           <div className="grid gap-4">
             <div>
@@ -499,9 +508,9 @@ export function ProfilePage() {
             </div>
           </div>
         </SectionCard>
-      </div>
+      </fieldset>
 
-      <div className="grid gap-6 xl:grid-cols-[1.35fr_0.9fr]">
+      <fieldset disabled={isShowcase} className="grid gap-6 xl:grid-cols-[1.35fr_0.9fr] disabled:opacity-70">
         <SectionCard
           title="Preferred sectors"
           subtitle="Pick the industries you want your “For you” feed to prioritize."
@@ -625,7 +634,7 @@ export function ProfilePage() {
                   <Link to="/app/account" className="btn-secondary h-10 px-4">
                     Billing & account
                   </Link>
-                  <button type="button" className="btn-primary h-10 px-4" onClick={() => void saveCredentials()} disabled={!canSaveCredentials || savingCredentials}>
+                  <button type="button" className="btn-primary h-10 px-4" onClick={() => void saveCredentials()} disabled={isShowcase || !canSaveCredentials || savingCredentials}>
                     {savingCredentials ? "Updating…" : "Update login"}
                   </button>
                 </div>
@@ -633,7 +642,7 @@ export function ProfilePage() {
             </div>
           </SectionCard>
         </div>
-      </div>
+      </fieldset>
     </div>
   );
 }

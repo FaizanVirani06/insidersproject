@@ -7,7 +7,7 @@ import { apiFetch } from "@/lib/api";
 type AdminUserRow = {
   user_id: number;
   username: string;
-  role: "admin" | "user";
+  role: "admin" | "showcase" | "user";
   is_active: number;
   created_at: string;
   updated_at: string;
@@ -78,6 +78,7 @@ async function getErrorMessage(res: Response): Promise<string> {
 
 export function AdminUsersPage() {
   const { user } = useAuth();
+  const isShowcase = user?.role === "showcase";
 
   const [q, setQ] = React.useState("");
   const [includeInactive, setIncludeInactive] = React.useState(false);
@@ -162,6 +163,12 @@ export function AdminUsersPage() {
         </div>
       </div>
 
+      {isShowcase ? (
+        <div className="rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-700 dark:text-cyan-300">
+          Spectator mode is read-only. You can review users here, but access changes are disabled.
+        </div>
+      ) : null}
+
       <div className="glass-panel p-5">
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
           <input
@@ -231,7 +238,7 @@ export function AdminUsersPage() {
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="font-semibold text-zinc-900 dark:text-zinc-100">{row.full_name || row.username}</div>
                         {isCurrentUser ? <span className="badge">You</span> : null}
-                        {row.role === "admin" ? <span className="badge">Admin</span> : null}
+                        {row.role === "admin" ? <span className="badge">Admin</span> : row.role === "showcase" ? <span className="badge">Showcase</span> : null}
                       </div>
                       <div className="mt-1 text-sm muted">Login: {row.username}</div>
                       {row.contact_email ? <div className="mt-1 text-sm muted">Contact: {row.contact_email}</div> : null}
@@ -269,10 +276,10 @@ export function AdminUsersPage() {
                       <button
                         type="button"
                         className="btn-secondary h-9 px-3"
-                        disabled={!isActive || isCurrentUser || removingUserId === row.user_id}
+                        disabled={isShowcase || !isActive || isCurrentUser || removingUserId === row.user_id}
                         onClick={() => void removeAccess(row)}
                       >
-                        {removingUserId === row.user_id ? "Removing…" : "Remove access"}
+                        {isShowcase ? "Read only" : removingUserId === row.user_id ? "Removing…" : "Remove access"}
                       </button>
                     </td>
                   </tr>

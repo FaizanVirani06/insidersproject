@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { useAuth } from "@/components/auth-provider";
 import { apiFetch } from "@/lib/api";
 
 type SupportThreadRow = {
@@ -41,6 +42,8 @@ function fmtTime(iso: string | null | undefined): string {
 }
 
 export function AdminSupportPage() {
+  const { user } = useAuth();
+  const isShowcase = user?.role === "showcase";
   const [status, setStatus] = React.useState<"open" | "closed" | "all">("open");
   const [threads, setThreads] = React.useState<SupportThreadRow[]>([]);
   const [loadingThreads, setLoadingThreads] = React.useState(false);
@@ -160,6 +163,12 @@ export function AdminSupportPage() {
         </div>
       </div>
 
+      {isShowcase ? (
+        <div className="rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-700 dark:text-cyan-300">
+          Spectator mode is read-only. You can review support threads here, but replying is disabled.
+        </div>
+      ) : null}
+
       <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
         <div className="glass-card overflow-hidden">
           <div className="border-b border-zinc-200/60 px-4 py-3 dark:border-zinc-800/60">
@@ -242,7 +251,7 @@ export function AdminSupportPage() {
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 rows={2}
-                disabled={!selectedThreadId || sending}
+                disabled={isShowcase || !selectedThreadId || sending}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
@@ -250,14 +259,14 @@ export function AdminSupportPage() {
                   }
                 }}
               />
-              <button type="button" className="btn-primary h-11 px-4" onClick={() => void send()} disabled={!selectedThreadId || sending}>
-                {sending ? "Sending…" : "Send"}
+              <button type="button" className="btn-primary h-11 px-4" onClick={() => void send()} disabled={isShowcase || !selectedThreadId || sending}>
+                {isShowcase ? "Read only" : sending ? "Sending…" : "Send"}
               </button>
             </div>
 
             <div className="mt-2 flex items-center justify-between gap-3 flex-wrap">
               <label className="flex items-center gap-2 text-xs muted">
-                <input type="checkbox" checked={closeOnSend} onChange={(e) => setCloseOnSend(e.target.checked)} />
+                <input type="checkbox" checked={closeOnSend} onChange={(e) => setCloseOnSend(e.target.checked)} disabled={isShowcase} />
                 Close thread after sending
               </label>
               <div className="text-[11px] muted">Press Enter to send • Shift+Enter for newline</div>

@@ -51,7 +51,7 @@ export function SignupPage() {
       const user = (data?.user ?? null) as any;
       setUser(user);
 
-      const isPaid = Boolean(user?.is_paid) || user?.role === "admin";
+      const isPaid = Boolean(user?.is_paid) || user?.role === "admin" || user?.role === "showcase";
       const next = sp.get("next");
 
       if (next) {

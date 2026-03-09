@@ -82,13 +82,22 @@ def get_current_user(
         user = public_user(row)
 
     # Convenience booleans
-    user["is_admin"] = (user.get("role") == "admin")
+    role = str(user.get("role") or "").strip().lower()
+    user["is_admin"] = role == "admin"
+    user["is_showcase"] = role == "showcase"
+    user["can_view_admin"] = role in ("admin", "showcase")
     return user
 
 
 def require_admin(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="admin_required")
+    return user
+
+
+def require_admin_viewer(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    if str(user.get("role") or "").strip().lower() not in ("admin", "showcase"):
+        raise HTTPException(status_code=403, detail="admin_view_required")
     return user
 
 
@@ -105,8 +114,8 @@ def require_subscription(
     if cfg is None:
         raise HTTPException(status_code=500, detail="server_config_missing")
 
-    # Admin bypass
-    if user.get("role") == "admin":
+    # Admin/showcase bypass
+    if str(user.get("role") or "").strip().lower() in ("admin", "showcase"):
         return user
 
     # Dev bypass

@@ -14,12 +14,13 @@ This allows the frontend to be a static SPA (Vite/React) without needing
 a framework-specific server-side proxy.
 """
 
-from .deps import get_current_user, require_admin, require_subscription
+from .deps import get_current_user, require_admin, require_admin_viewer, require_subscription
 from .crud import bootstrap_admin_if_needed, create_user
 
 __all__ = [
     "get_current_user",
     "require_admin",
+    "require_admin_viewer",
     "require_subscription",
     "bootstrap_admin_if_needed",
     "create_user",

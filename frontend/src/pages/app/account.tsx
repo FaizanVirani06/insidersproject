@@ -52,7 +52,8 @@ export function AccountPage() {
     }
   }, [sp, refresh]);
 
-  const isPaid = Boolean((user as any)?.is_paid) || user?.role === "admin";
+  const isShowcase = user?.role === "showcase";
+  const isPaid = Boolean((user as any)?.is_paid) || user?.role === "admin" || isShowcase;
   const status = (user as any)?.subscription_status || "";
 
   const startCheckout = async (plan: "monthly" | "yearly") => {
@@ -108,6 +109,12 @@ export function AccountPage() {
         <p className="mt-1 text-sm muted">Manage your subscription and billing.</p>
       </div>
 
+      {isShowcase ? (
+        <div className="rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-700 dark:text-cyan-300">
+          Spectator mode is active. Billing changes and account edits are disabled for the showcase account.
+        </div>
+      ) : null}
+
       <div className="glass-panel p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -119,7 +126,11 @@ export function AccountPage() {
           <div className="text-right">
             <div className="text-sm font-semibold">Subscription</div>
             <div className="mt-1 text-sm">
-              {isPaid ? (
+              {isShowcase ? (
+                <span className="inline-flex items-center rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-cyan-700 dark:text-cyan-300">
+                  Showcase access
+                </span>
+              ) : isPaid ? (
                 <span className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-emerald-700 dark:text-emerald-300">
                   Active
                 </span>
@@ -141,7 +152,7 @@ export function AccountPage() {
             Refresh status
           </button>
 
-          {!loadingPlans && plans.enabled && !isPaid && (
+          {!isShowcase && !loadingPlans && plans.enabled && !isPaid && (
             <>
               <button
                 type="button"
@@ -163,7 +174,7 @@ export function AccountPage() {
             </>
           )}
 
-          {isPaid && (user as any)?.stripe_customer_id && (
+          {!isShowcase && isPaid && (user as any)?.stripe_customer_id && (
             <button type="button" disabled={busy !== null} onClick={() => openPortal()} className="btn-secondary">
               {busy === "portal" ? "Opening…" : "Manage billing"}
             </button>

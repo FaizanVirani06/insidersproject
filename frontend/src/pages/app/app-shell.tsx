@@ -40,6 +40,8 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 export function AppShell() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const isShowcase = user?.role === "showcase";
+  const canViewAdmin = Boolean(user?.can_view_admin) || isAdmin || isShowcase;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
@@ -69,16 +71,16 @@ export function AppShell() {
             </div>
           </div>
 
-          {isAdmin ? (
+          {canViewAdmin ? (
             <div className="space-y-2">
               <SectionLabel>Admin</SectionLabel>
               <div className="space-y-1">
-                <NavItem to="/app/admin/users" label="Users" subtitle="View and remove access" />
+                <NavItem to="/app/admin/users" label="Users" subtitle={isShowcase ? "View account access" : "View and remove access"} />
                 <NavItem to="/app/admin/monitoring" label="Monitoring" subtitle="Platform health" />
                 <NavItem to="/app/admin/jobs" label="Jobs" subtitle="Queue and backfills" />
                 <NavItem to="/app/admin/feedback" label="Feedback inbox" subtitle="Customer feedback" />
-                <NavItem to="/app/admin/support" label="Support" subtitle="Conversations and replies" />
-                <NavItem to="/app/admin/settings" label="Site settings" subtitle="Pricing and config" />
+                <NavItem to="/app/admin/support" label="Support" subtitle={isShowcase ? "Read-only inbox view" : "Conversations and replies"} />
+                <NavItem to="/app/admin/settings" label="Site settings" subtitle={isShowcase ? "Read-only config view" : "Pricing and config"} />
               </div>
             </div>
           ) : null}
@@ -90,6 +92,10 @@ export function AppShell() {
           {user?.role === "admin" ? (
             <span className="mt-3 inline-flex rounded-full border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 text-xs font-medium text-purple-700 dark:text-purple-300">
               Admin access
+            </span>
+          ) : user?.role === "showcase" ? (
+            <span className="mt-3 inline-flex rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-xs font-medium text-cyan-700 dark:text-cyan-300">
+              Showcase access
             </span>
           ) : (user as any)?.is_paid ? (
             <span className="mt-3 inline-flex rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">

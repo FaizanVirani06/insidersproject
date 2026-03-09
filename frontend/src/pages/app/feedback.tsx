@@ -1,9 +1,12 @@
 "use client";
 
 import * as React from "react";
+import { useAuth } from "@/components/auth-provider";
 import { apiFetch } from "@/lib/api";
 
 export function FeedbackPage() {
+  const { user } = useAuth();
+  const isShowcase = user?.role === "showcase";
   const [message, setMessage] = React.useState("");
   const [rating, setRating] = React.useState<number | "">("");
   const [pageUrl, setPageUrl] = React.useState("");
@@ -61,8 +64,15 @@ export function FeedbackPage() {
         </p>
       </div>
 
+      {isShowcase ? (
+        <div className="rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-700 dark:text-cyan-300">
+          Spectator mode is read-only. Feedback submission is disabled for the showcase account.
+        </div>
+      ) : null}
+
       <div className="rounded-2xl border bg-white p-6 shadow-sm dark:bg-black/20">
         <form onSubmit={submit} className="space-y-4">
+          <fieldset disabled={isShowcase} className="space-y-4 disabled:opacity-70">
           <div>
             <label className="block text-sm font-medium">Rating (optional)</label>
             <select
@@ -104,11 +114,12 @@ export function FeedbackPage() {
 
           <button
             type="submit"
-            disabled={loading || message.trim().length < 3}
+            disabled={isShowcase || loading || message.trim().length < 3}
             className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-60 hover:opacity-90 dark:bg-white dark:text-black"
           >
             {loading ? "Sending…" : "Send feedback"}
           </button>
+          </fieldset>
         </form>
       </div>
 

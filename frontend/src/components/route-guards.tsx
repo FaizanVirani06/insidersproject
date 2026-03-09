@@ -23,16 +23,16 @@ export function RequireAuth({ children }: { children?: React.ReactNode }) {
   return <>{children ?? <Outlet />}</>;
 }
 
-export function RequireAdmin({ children }: { children?: React.ReactNode }) {
+export function RequireAdminViewer({ children }: { children?: React.ReactNode }) {
   const { user, loading } = useAuth();
 
   if (loading) return <LoadingScreen />;
   if (!user) return <Navigate to="/login" replace />;
-  if (user.role !== "admin") {
+  if (!(user.can_view_admin || user.role === "admin" || user.role === "showcase")) {
     return (
       <div className="mx-auto max-w-3xl py-20">
         <div className="glass-card p-8">
-          <div className="text-xl font-semibold">Admin only</div>
+          <div className="text-xl font-semibold">Admin view only</div>
           <div className="mt-2 text-sm muted">You do not have permission to view this page.</div>
         </div>
       </div>
@@ -48,8 +48,8 @@ export function RequireSubscription({ children }: { children?: React.ReactNode }
   if (loading) return <LoadingScreen />;
   if (!user) return <Navigate to="/login" replace />;
 
-  // Admins always allowed.
-  if (user.role === "admin") return <>{children ?? <Outlet />}</>;
+  // Admins and showcase viewers are always allowed.
+  if (user.role === "admin" || user.role === "showcase") return <>{children ?? <Outlet />}</>;
 
   // Paid users allowed.
   if ((user as any)?.is_paid) return <>{children ?? <Outlet />}</>;

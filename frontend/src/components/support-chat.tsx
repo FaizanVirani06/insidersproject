@@ -50,6 +50,7 @@ export function SupportChatWidget() {
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
 
   const loggedIn = Boolean(user);
+  const isShowcase = user?.role === "showcase";
 
   async function load() {
     if (!loggedIn) return;
@@ -113,7 +114,7 @@ export function SupportChatWidget() {
   }, [open, messages.length]);
 
   // Hide the widget on admin pages to reduce clutter.
-  const hide = location.pathname.startsWith("/app/admin");
+  const hide = location.pathname.startsWith("/app/admin") || isShowcase;
   if (hide) return null;
 
   return (

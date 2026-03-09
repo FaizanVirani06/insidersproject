@@ -234,6 +234,47 @@ def _table_columns(conn: Any, table: str) -> List[str]:
     return [str(r["column_name"]) for r in rows]
 
 
+def _ensure_users_role_constraint(conn: Any) -> None:
+    """Allow the showcase role on existing databases."""
+
+    if not _table_exists(conn, "users"):
+        return
+
+    rows = conn.execute(
+        """
+        SELECT con.conname AS name, pg_get_constraintdef(con.oid, true) AS definition
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        WHERE nsp.nspname = 'public'
+          AND rel.relname = ?
+          AND con.contype = 'c'
+        """,
+        ("users",),
+    ).fetchall()
+
+    role_constraints = []
+    showcase_allowed = False
+    for row in rows:
+        definition = str(row.get("definition") or "").lower()
+        if "role" not in definition:
+            continue
+        role_constraints.append(str(row.get("name") or ""))
+        if "showcase" in definition:
+            showcase_allowed = True
+
+    if showcase_allowed:
+        return
+
+    for name in role_constraints:
+        safe_name = name.replace('"', '""')
+        conn.execute(f'ALTER TABLE users DROP CONSTRAINT IF EXISTS "{safe_name}"')
+
+    conn.execute(
+        "ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin','showcase','user'))"
+    )
+
+
 def _migrate(conn: Any) -> None:
     """Lightweight forward-only migrations for existing DBs."""
 
@@ -283,6 +324,9 @@ def _migrate(conn: Any) -> None:
                     conn.execute(f"ALTER TABLE users ADD COLUMN {col} {ctype} NOT NULL DEFAULT 0")
                 else:
                     conn.execute(f"ALTER TABLE users ADD COLUMN {col} {ctype}")
+
+    # --- users: allow showcase role on existing DBs ---
+    _ensure_users_role_constraint(conn)
 
 
 def upsert_app_config(conn: Any, key: str, value: str) -> None:

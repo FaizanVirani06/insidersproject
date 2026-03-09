@@ -16,9 +16,13 @@ def normalize_username(username: str) -> str:
 def public_user(row: Any | Dict[str, Any]) -> Dict[str, Any]:
     d = dict(row)
     d.pop("password_hash", None)
-    # Convenience flag used by the frontend for gating.
+    role = str(d.get("role") or "").strip().lower()
+    # Convenience flags used by the frontend for gating.
     status = (d.get("subscription_status") or "").strip().lower()
     d["is_paid"] = status in ("active", "trialing")
+    d["is_admin"] = role == "admin"
+    d["is_showcase"] = role == "showcase"
+    d["can_view_admin"] = role in ("admin", "showcase")
     return d
 
 
@@ -114,7 +118,7 @@ def create_user(
     u = normalize_username(username)
     if not u:
         raise ValueError("username_blank")
-    if role not in ("admin", "user"):
+    if role not in ("admin", "showcase", "user"):
         raise ValueError("invalid_role")
 
     # Use the normalized username for uniqueness checks.

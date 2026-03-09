@@ -1,6 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
-import { RequireAdmin, RequireAuth, RequireSubscription } from "@/components/route-guards";
+import { RequireAdminViewer, RequireAuth, RequireSubscription } from "@/components/route-guards";
 
 import { RootLayout } from "@/pages/root-layout";
 import { HomePage } from "@/pages/home";
@@ -70,7 +70,7 @@ export function App() {
           </Route>
 
           {/* Admin routes */}
-          <Route element={<RequireAdmin />}>
+          <Route element={<RequireAdminViewer />}>
             <Route path="admin/users" element={<AdminUsersPage />} />
             <Route path="admin/monitoring" element={<AdminMonitoringPage />} />
             <Route path="admin/jobs" element={<AdminJobsPage />} />

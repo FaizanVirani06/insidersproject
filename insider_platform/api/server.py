@@ -16,7 +16,7 @@ from insider_platform.jobs.queue import enqueue_job
 
 from insider_platform.compute.trade_plan import compute_trade_plan_for_event
 
-from insider_platform.auth import get_current_user, require_admin, require_subscription
+from insider_platform.auth import get_current_user, require_admin, require_admin_viewer, require_subscription
 from insider_platform.auth.crud import (
     bootstrap_admin_if_needed,
     create_user,
@@ -168,7 +168,7 @@ class RegisterRequest(BaseModel):
 class CreateUserRequest(BaseModel):
     username: str
     password: str
-    role: str = "user"  # admin|user
+    role: str = "user"  # admin|showcase|user
 
 
 class ProfileUpsertRequest(BaseModel):
@@ -194,6 +194,11 @@ class SiteBrandingUpdateRequest(BaseModel):
     logo_text: str | None = None
     logo_image_src: str | None = None
     favicon_image_src: str | None = None
+
+
+class ShowcaseCredentialsUpdateRequest(BaseModel):
+    username: str
+    password: str | None = None
 
 
 DEFAULT_PROFILE_PREFERENCES: Dict[str, Any] = {
@@ -226,6 +231,11 @@ def _unique_nonempty_strs(values: Any) -> list[str]:
 def _clean_profile_text(value: Any) -> str | None:
     s = str(value or "").strip()
     return s or None
+
+
+def _reject_showcase_mutation(user: Dict[str, Any]) -> None:
+    if str(user.get("role") or "").strip().lower() == "showcase":
+        raise HTTPException(status_code=403, detail="showcase_read_only")
 
 
 def _normalize_profile_preferences(raw: Any) -> Dict[str, Any]:
@@ -435,6 +445,76 @@ def _upsert_site_branding(conn: Any, payload: SiteBrandingUpdateRequest) -> Dict
     return _get_site_branding(conn)
 
 
+def _get_showcase_user_row(conn: Any) -> Dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM users WHERE role='showcase' ORDER BY user_id ASC LIMIT 1"
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _get_showcase_user(conn: Any) -> Dict[str, Any] | None:
+    row = _get_showcase_user_row(conn)
+    return public_user(row) if row is not None else None
+
+
+def _upsert_showcase_user(conn: Any, payload: ShowcaseCredentialsUpdateRequest) -> Dict[str, Any]:
+    username = str(payload.username or "").strip().lower()
+    password = payload.password or None
+
+    if len(username) < 3:
+        raise HTTPException(status_code=400, detail="username_too_short")
+    if password is not None and password != "" and len(password) < 8:
+        raise HTTPException(status_code=400, detail="password_too_short")
+
+    rows = conn.execute(
+        "SELECT * FROM users WHERE role='showcase' ORDER BY user_id ASC"
+    ).fetchall()
+    primary = dict(rows[0]) if rows else None
+    extras = [dict(r) for r in rows[1:]]
+    now = utcnow_iso()
+
+    if primary is None:
+        if not password:
+            raise HTTPException(status_code=400, detail="password_required")
+        user = create_user(conn, username=username, password=password, role="showcase")
+        return user
+
+    existing = conn.execute(
+        "SELECT user_id FROM users WHERE username=? AND user_id<>?",
+        (username, int(primary["user_id"])),
+    ).fetchone()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="username_exists")
+
+    fields: list[tuple[str, Any]] = []
+    if username != str(primary.get("username") or ""):
+        fields.append(("username", username))
+    if password:
+        fields.append(("password_hash", hash_password(password)))
+    if int(primary.get("is_active") or 0) != 1:
+        fields.append(("is_active", 1))
+
+    if fields:
+        fields.append(("updated_at", now))
+        sets = ", ".join([f"{key}=?" for key, _ in fields])
+        values = [value for _, value in fields] + [int(primary["user_id"])]
+        conn.execute(f"UPDATE users SET {sets} WHERE user_id=?", values)
+
+    for extra in extras:
+        conn.execute(
+            "UPDATE users SET is_active=0, updated_at=? WHERE user_id=?",
+            (now, int(extra["user_id"])),
+        )
+
+    refreshed = conn.execute(
+        "SELECT * FROM users WHERE user_id=?",
+        (int(primary["user_id"]),),
+    ).fetchone()
+    if refreshed is None:
+        raise HTTPException(status_code=404, detail="user_not_found")
+    return public_user(refreshed)
+
+
 def _sanitize_event_row_for_viewer(event: Dict[str, Any], *, is_admin: bool) -> Dict[str, Any]:
     if is_admin:
         return event
@@ -556,6 +636,7 @@ def auth_update_credentials(
     response: Response,
     user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
+    _reject_showcase_mutation(user)
     current_password = payload.current_password or ""
     if not current_password:
         raise HTTPException(status_code=400, detail="current_password_required")
@@ -633,6 +714,7 @@ def put_profile(
     payload: ProfileUpsertRequest,
     user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
+    _reject_showcase_mutation(user)
     with connect(cfg.DB_DSN) as conn:
         profile = _upsert_profile(conn, int(user["user_id"]), payload)
     return {"profile": profile}
@@ -767,7 +849,7 @@ def admin_list_users(
     include_inactive: bool = Query(False),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0, le=50000),
-    _admin: Dict[str, Any] = Depends(require_admin),
+    _admin: Dict[str, Any] = Depends(require_admin_viewer),
 ) -> Dict[str, Any]:
     qn = (q or "").strip()
     like = f"%{qn}%" if qn else None
@@ -902,6 +984,25 @@ def admin_update_site_branding(
     with connect(cfg.DB_DSN) as conn:
         branding = _upsert_site_branding(conn, payload)
     return {"ok": True, "branding": branding}
+
+
+@app.get("/admin/site/showcase-user")
+def admin_get_showcase_user(
+    _viewer: Dict[str, Any] = Depends(require_admin_viewer),
+) -> Dict[str, Any]:
+    with connect(cfg.DB_DSN) as conn:
+        showcase_user = _get_showcase_user(conn)
+    return {"showcase_user": showcase_user}
+
+
+@app.post("/admin/site/showcase-user")
+def admin_upsert_showcase_user(
+    payload: ShowcaseCredentialsUpdateRequest,
+    _admin: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    with connect(cfg.DB_DSN) as conn:
+        showcase_user = _upsert_showcase_user(conn, payload)
+    return {"ok": True, "showcase_user": showcase_user}
 
 
 # -----------------------------
@@ -1039,6 +1140,7 @@ def billing_checkout_session(
     user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Create a Stripe Checkout session for the logged-in user."""
+    _reject_showcase_mutation(user)
     plan = (payload.plan or "monthly").strip().lower()
     if plan not in ("monthly", "yearly"):
         raise HTTPException(status_code=400, detail="invalid_plan")
@@ -1072,6 +1174,7 @@ def billing_checkout_session(
 @app.post("/billing/portal-session")
 def billing_portal_session(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     """Create a Stripe Customer Portal session."""
+    _reject_showcase_mutation(user)
     customer_id = (user.get("stripe_customer_id") or "").strip()
     if not customer_id:
         raise HTTPException(status_code=400, detail="stripe_customer_missing")
@@ -1124,6 +1227,7 @@ def submit_feedback(
     payload: FeedbackRequest,
     user: Dict[str, Any] = Depends(require_subscription),
 ) -> Dict[str, Any]:
+    _reject_showcase_mutation(user)
     msg = (payload.message or "").strip()
     if len(msg) < 3:
         raise HTTPException(status_code=400, detail="message_too_short")
@@ -1154,7 +1258,7 @@ def submit_feedback(
 @app.get("/admin/feedback")
 def admin_list_feedback(
     limit: int = Query(100, ge=1, le=500),
-    _admin: Dict[str, Any] = Depends(require_admin),
+    _admin: Dict[str, Any] = Depends(require_admin_viewer),
 ) -> Dict[str, Any]:
     with connect(cfg.DB_DSN) as conn:
         rows = conn.execute(
@@ -1239,6 +1343,7 @@ def support_send_message(
     If there is no open thread, a new one is created.
     """
 
+    _reject_showcase_mutation(user)
     msg = (payload.message or "").strip()
     if len(msg) < 1:
         raise HTTPException(status_code=400, detail="message_too_short")
@@ -1300,7 +1405,7 @@ def support_send_message(
 def admin_support_threads(
     status: str | None = Query(None, description="open|closed"),
     limit: int = Query(50, ge=1, le=200),
-    _admin: Dict[str, Any] = Depends(require_admin),
+    _admin: Dict[str, Any] = Depends(require_admin_viewer),
 ) -> Dict[str, Any]:
     st = (status or "").strip().lower() or None
     if st is not None and st not in ("open", "closed"):
@@ -1357,7 +1462,7 @@ def admin_support_threads(
 @app.get("/admin/support/thread/{thread_id}")
 def admin_support_thread_detail(
     thread_id: int,
-    _admin: Dict[str, Any] = Depends(require_admin),
+    _admin: Dict[str, Any] = Depends(require_admin_viewer),
 ) -> Dict[str, Any]:
     tid = int(thread_id)
     with connect(cfg.DB_DSN) as conn:
@@ -2158,7 +2263,7 @@ def ticker_prices(
 def admin_jobs(
     status: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=500),
-    _admin: Dict[str, Any] = Depends(require_admin),
+    _admin: Dict[str, Any] = Depends(require_admin_viewer),
 ) -> Dict[str, Any]:
     with connect(cfg.DB_DSN) as conn:
         # Always return status counts for quick triage
@@ -2194,7 +2299,7 @@ def admin_jobs(
 def admin_monitoring(
     window_hours: int = Query(24, ge=1, le=168),
     limit_types: int = Query(25, ge=1, le=200),
-    _admin: Dict[str, Any] = Depends(require_admin),
+    _admin: Dict[str, Any] = Depends(require_admin_viewer),
 ) -> Dict[str, Any]:
     """Lightweight operational metrics for admins."""
 
