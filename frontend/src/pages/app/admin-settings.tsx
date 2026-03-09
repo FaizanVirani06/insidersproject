@@ -6,6 +6,8 @@ import {
   DEFAULT_SITE_BRANDING,
   emitSiteBrandingUpdated,
   normalizeSiteBranding,
+  resolveSiteBrandText,
+  resolveSiteFaviconSrc,
   type SiteBranding,
 } from "@/lib/site-branding";
 
@@ -17,31 +19,58 @@ type PricingDisplay = {
 
 function PreviewBrand({ branding }: { branding: SiteBranding }) {
   const showImage = branding.logo_mode === "image" && !!branding.logo_image_src;
+  const faviconSrc = resolveSiteFaviconSrc(branding);
+  const browserTitle = `Events • ${resolveSiteBrandText(branding)}`;
 
   return (
     <div className="rounded-2xl border border-zinc-800/60 bg-black/25 p-5">
       <div className="text-xs font-semibold uppercase tracking-[0.18em] muted">Live preview</div>
-      <div className="mt-4 rounded-2xl border border-zinc-800/60 bg-black/35 p-4">
-        <div className="flex items-center justify-between gap-4 border-b border-zinc-800/60 pb-4">
-          <div className="flex items-center gap-3">
-            {showImage ? (
-              <img
-                src={branding.logo_image_src || undefined}
-                alt={branding.logo_text || "InsidrsAI"}
-                className="h-9 w-auto max-w-[200px] object-contain"
-              />
-            ) : (
-              <div className="bg-gradient-to-r from-purple-400 via-cyan-300 to-blue-300 bg-clip-text text-xl font-semibold tracking-tight text-transparent">
-                {branding.logo_text || "InsidrsAI"}
-              </div>
-            )}
+      <div className="mt-4 space-y-4 rounded-2xl border border-zinc-800/60 bg-black/35 p-4">
+        <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/90 p-3 shadow-[0_12px_50px_rgba(0,0,0,0.35)]">
+          <div className="flex items-center gap-2 rounded-xl border border-zinc-800/60 bg-black/60 px-3 py-2 text-sm text-zinc-300">
+            <div className="h-3 w-3 rounded-full bg-red-400/80" />
+            <div className="h-3 w-3 rounded-full bg-yellow-400/80" />
+            <div className="h-3 w-3 rounded-full bg-emerald-400/80" />
+            <div className="ml-2 flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-zinc-800/60 bg-black/60 px-3 py-2">
+              <img src={faviconSrc} alt="Tab icon preview" className="h-4 w-4 rounded-sm object-cover" />
+              <span className="truncate text-sm text-zinc-100">{browserTitle}</span>
+            </div>
           </div>
-          <div className="rounded-full bg-white/10 px-3 py-2 text-sm text-zinc-300">Header logo</div>
         </div>
 
-        <div className="mt-4 flex items-center justify-between gap-3">
-          <SiteBrandMark textClassName="text-lg" imageClassName="h-8" />
-          <span className="text-sm muted">Current saved branding</span>
+        <div className="rounded-2xl border border-zinc-800/60 bg-black/25 p-4">
+          <div className="flex items-center justify-between gap-4 border-b border-zinc-800/60 pb-4">
+            <div className="flex items-center gap-3">
+              {showImage ? (
+                <img
+                  src={branding.logo_image_src || undefined}
+                  alt={branding.logo_text || "InsidrsAI"}
+                  className="h-9 w-auto max-w-[200px] object-contain"
+                />
+              ) : (
+                <div className="bg-gradient-to-r from-purple-400 via-cyan-300 to-blue-300 bg-clip-text text-xl font-semibold tracking-tight text-transparent">
+                  {branding.logo_text || "InsidrsAI"}
+                </div>
+              )}
+            </div>
+            <div className="rounded-full bg-white/10 px-3 py-2 text-sm text-zinc-300">Header logo</div>
+          </div>
+
+          <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-zinc-800/60 bg-black/30 px-3 py-3">
+            <div className="flex items-center gap-3">
+              <img src={faviconSrc} alt="Favicon preview" className="h-8 w-8 rounded-lg border border-zinc-700/60 object-cover" />
+              <div>
+                <div className="text-sm font-medium text-zinc-100">Browser tab icon</div>
+                <div className="text-xs muted">Shown in the browser tab and bookmark bar.</div>
+              </div>
+            </div>
+            <span className="rounded-full border border-zinc-700/60 bg-white/5 px-3 py-1 text-xs text-zinc-300">Favicon</span>
+          </div>
+
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <SiteBrandMark textClassName="text-lg" imageClassName="h-8" />
+            <span className="text-sm muted">Current saved branding</span>
+          </div>
         </div>
       </div>
     </div>
@@ -86,7 +115,9 @@ export function AdminSettingsPage() {
   const [logoMode, setLogoMode] = React.useState<"text" | "image">("text");
   const [logoText, setLogoText] = React.useState("InsidrsAI");
   const [logoImageSrc, setLogoImageSrc] = React.useState("");
-  const [uploadingLabel, setUploadingLabel] = React.useState<string | null>(null);
+  const [faviconImageSrc, setFaviconImageSrc] = React.useState("");
+  const [uploadingLogoLabel, setUploadingLogoLabel] = React.useState<string | null>(null);
+  const [uploadingFaviconLabel, setUploadingFaviconLabel] = React.useState<string | null>(null);
 
   const livePreview = React.useMemo<SiteBranding>(
     () =>
@@ -94,8 +125,9 @@ export function AdminSettingsPage() {
         logo_mode: logoMode,
         logo_text: logoText,
         logo_image_src: logoImageSrc,
+        favicon_image_src: faviconImageSrc,
       }),
-    [logoMode, logoText, logoImageSrc]
+    [faviconImageSrc, logoImageSrc, logoMode, logoText]
   );
 
   const hydrateBranding = React.useCallback((branding: SiteBranding) => {
@@ -104,6 +136,7 @@ export function AdminSettingsPage() {
     setLogoMode(normalized.logo_mode);
     setLogoText(normalized.logo_text);
     setLogoImageSrc(normalized.logo_image_src || "");
+    setFaviconImageSrc(normalized.favicon_image_src || "");
   }, []);
 
   const load = React.useCallback(async () => {
@@ -196,6 +229,7 @@ export function AdminSettingsPage() {
           logo_mode: logoMode,
           logo_text: logoText.trim(),
           logo_image_src: logoImageSrc.trim() || null,
+          favicon_image_src: faviconImageSrc.trim() || null,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -212,22 +246,35 @@ export function AdminSettingsPage() {
     }
   }
 
-  async function handleUpload(event: React.ChangeEvent<HTMLInputElement>) {
+  async function handleUpload(event: React.ChangeEvent<HTMLInputElement>, target: "logo" | "favicon") {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    setUploadingLabel(file.name);
+    if (target === "logo") {
+      setUploadingLogoLabel(file.name);
+    } else {
+      setUploadingFaviconLabel(file.name);
+    }
     setError(null);
 
     try {
       const dataUrl = await readFileAsDataUrl(file);
-      setLogoMode("image");
-      setLogoImageSrc(dataUrl);
-      setSuccess("Logo loaded into the preview. Save branding to publish it.");
+      if (target === "logo") {
+        setLogoMode("image");
+        setLogoImageSrc(dataUrl);
+        setSuccess("Logo loaded into the preview. Save branding to publish it.");
+      } else {
+        setFaviconImageSrc(dataUrl);
+        setSuccess("Tab icon loaded into the preview. Save branding to publish it.");
+      }
     } catch (e: any) {
-      setError(e?.message || "Failed to load logo file.");
+      setError(e?.message || "Failed to load image file.");
     } finally {
-      setUploadingLabel(null);
+      if (target === "logo") {
+        setUploadingLogoLabel(null);
+      } else {
+        setUploadingFaviconLabel(null);
+      }
       event.target.value = "";
     }
   }
@@ -235,7 +282,14 @@ export function AdminSettingsPage() {
   const brandingDirty =
     livePreview.logo_mode !== savedBranding.logo_mode ||
     livePreview.logo_text !== savedBranding.logo_text ||
-    (livePreview.logo_image_src || "") !== (savedBranding.logo_image_src || "");
+    (livePreview.logo_image_src || "") !== (savedBranding.logo_image_src || "") ||
+    (livePreview.favicon_image_src || "") !== (savedBranding.favicon_image_src || "");
+
+  const faviconStatus = savedBranding.favicon_image_src
+    ? "Custom icon"
+    : savedBranding.logo_image_src
+      ? "Uses logo image"
+      : "Default icon";
 
   return (
     <div className="space-y-6">
@@ -245,7 +299,7 @@ export function AdminSettingsPage() {
             <div className="text-xs font-semibold uppercase tracking-[0.18em] muted">Admin controls</div>
             <h1 className="mt-2 text-3xl font-semibold text-zinc-900 dark:text-zinc-100">Site settings</h1>
             <p className="mt-2 text-sm muted">
-              Update customer-facing pricing copy and change the public site logo without deploying new code.
+              Update customer-facing pricing copy and change the public site logo and browser tab icon without deploying new code.
             </p>
           </div>
 
@@ -254,7 +308,7 @@ export function AdminSettingsPage() {
           </button>
         </div>
 
-        <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <SummaryCard
             label="Display pricing"
             value={display ? `${display.currency} ${display.monthly_usd}/mo` : "—"}
@@ -270,10 +324,11 @@ export function AdminSettingsPage() {
             value={savedBranding.logo_mode === "image" ? "Image logo" : "Text logo"}
             helper={savedBranding.logo_text}
           />
+          <SummaryCard label="Tab icon" value={faviconStatus} helper="Displayed in browser tabs and bookmarks" />
           <SummaryCard
             label="Brand status"
             value={brandingDirty ? "Unsaved changes" : "Saved"}
-            helper={brandingDirty ? "Preview differs from live" : "Header is up to date"}
+            helper={brandingDirty ? "Preview differs from live" : "Header and tab icon are up to date"}
           />
         </div>
       </div>
@@ -344,9 +399,16 @@ export function AdminSettingsPage() {
 
         <div className="glass-panel p-5">
           <div className="text-sm font-semibold">Current brand</div>
-          <div className="mt-1 text-xs muted">The header and footer pull from this saved branding automatically.</div>
+          <div className="mt-1 text-xs muted">The header, footer, and browser tab pull from these saved settings automatically.</div>
           <div className="mt-4 rounded-2xl border border-zinc-800/60 bg-black/25 p-4">
-            <SiteBrandMark textClassName="text-xl" imageClassName="h-10" />
+            <div className="flex items-center justify-between gap-4">
+              <SiteBrandMark textClassName="text-xl" imageClassName="h-10" />
+              <img
+                src={resolveSiteFaviconSrc(savedBranding)}
+                alt="Current tab icon"
+                className="h-10 w-10 rounded-xl border border-zinc-700/60 object-cover"
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -357,7 +419,7 @@ export function AdminSettingsPage() {
             <div>
               <div className="text-sm font-semibold">Site branding</div>
               <div className="mt-1 text-xs muted">
-                Choose a text logo or upload an image for the public marketing site and app header.
+                Choose a text logo or upload an image for the public marketing site, app header, and browser tab.
               </div>
             </div>
 
@@ -394,7 +456,7 @@ export function AdminSettingsPage() {
             <div>
               <label className="block text-sm font-medium text-zinc-900 dark:text-zinc-100">Brand text</label>
               <input className="input mt-1" value={logoText} onChange={(e) => setLogoText(e.target.value)} />
-              <div className="mt-1 text-xs muted">Used for the text logo, alt text, and fallback when the image cannot load.</div>
+              <div className="mt-1 text-xs muted">Used for the text logo, alt text, and the browser tab title suffix.</div>
             </div>
           </div>
 
@@ -408,32 +470,63 @@ export function AdminSettingsPage() {
                 placeholder="Paste an https:// image URL or use the upload button below."
               />
               <div className="mt-1 text-xs muted">
-                PNG, JPG, SVG, and uploaded data URLs are supported. Leave blank to use text mode.
+                PNG, JPG, AVIF, SVG, and uploaded data URLs are supported. Leave blank to use text mode.
               </div>
             </div>
 
             <div className="rounded-2xl border border-zinc-800/60 bg-black/20 p-4">
               <div className="text-sm font-medium text-zinc-100">Upload logo file</div>
               <div className="mt-2 text-xs muted">
-                Convert a local image into an embedded logo without leaving the dashboard.
+                Convert a local image into an embedded header logo without leaving the dashboard.
               </div>
 
               <label className="btn-secondary mt-4 h-10 cursor-pointer px-4">
                 Choose file
-                <input type="file" accept="image/*" className="hidden" onChange={handleUpload} />
+                <input type="file" accept="image/*" className="hidden" onChange={(event) => void handleUpload(event, "logo")} />
               </label>
 
               <div className="mt-3 text-xs muted">
-                {uploadingLabel ? `Loading ${uploadingLabel}…` : "A saved upload becomes part of the site settings."}
+                {uploadingLogoLabel ? `Loading ${uploadingLogoLabel}…` : "A saved upload becomes part of the site settings."}
               </div>
 
               {logoImageSrc ? (
-                <button
-                  type="button"
-                  className="btn-ghost mt-4 h-9 px-3"
-                  onClick={() => setLogoImageSrc("")}
-                >
-                  Clear image
+                <button type="button" className="btn-ghost mt-4 h-9 px-3" onClick={() => setLogoImageSrc("")}>
+                  Clear logo image
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+            <div>
+              <label className="block text-sm font-medium text-zinc-900 dark:text-zinc-100">Browser tab icon URL or uploaded data</label>
+              <textarea
+                className="textarea mt-1 min-h-[110px]"
+                value={faviconImageSrc}
+                onChange={(e) => setFaviconImageSrc(e.target.value)}
+                placeholder="Paste an https:// image URL or use the upload button below. Leave blank to use the logo image or default icon."
+              />
+              <div className="mt-1 text-xs muted">
+                Recommended: a square PNG or AVIF. The tab icon updates across the app as soon as you save.
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-zinc-800/60 bg-black/20 p-4">
+              <div className="text-sm font-medium text-zinc-100">Upload tab icon</div>
+              <div className="mt-2 text-xs muted">
+                Use a clean square mark for the browser tab and bookmarks.
+              </div>
+
+              <label className="btn-secondary mt-4 h-10 cursor-pointer px-4">
+                Choose file
+                <input type="file" accept="image/*" className="hidden" onChange={(event) => void handleUpload(event, "favicon")} />
+              </label>
+
+              <div className="mt-3 text-xs muted">{uploadingFaviconLabel ? `Loading ${uploadingFaviconLabel}…` : "Square icons usually look best at small sizes."}</div>
+
+              {faviconImageSrc ? (
+                <button type="button" className="btn-ghost mt-4 h-9 px-3" onClick={() => setFaviconImageSrc("")}>
+                  Clear tab icon
                 </button>
               ) : null}
             </div>

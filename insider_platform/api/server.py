@@ -193,6 +193,7 @@ class SiteBrandingUpdateRequest(BaseModel):
     logo_mode: str | None = None
     logo_text: str | None = None
     logo_image_src: str | None = None
+    favicon_image_src: str | None = None
 
 
 DEFAULT_PROFILE_PREFERENCES: Dict[str, Any] = {
@@ -374,7 +375,24 @@ DEFAULT_SITE_BRANDING: Dict[str, Any] = {
     "logo_mode": "text",
     "logo_text": "InsidrsAI",
     "logo_image_src": None,
+    "favicon_image_src": None,
 }
+
+
+def _validate_brand_image_src(value: Any, *, error_prefix: str) -> str | None:
+    image_src = str(value or "").strip() or None
+    if image_src is None:
+        return None
+    if not (
+        image_src.startswith("data:image/")
+        or image_src.startswith("https://")
+        or image_src.startswith("http://")
+        or image_src.startswith("/")
+    ):
+        raise HTTPException(status_code=400, detail=f"invalid_{error_prefix}_image_src")
+    if len(image_src) > 500000:
+        raise HTTPException(status_code=400, detail=f"{error_prefix}_image_too_large")
+    return image_src
 
 
 def _get_site_branding(conn: Any) -> Dict[str, Any]:
@@ -383,6 +401,7 @@ def _get_site_branding(conn: Any) -> Dict[str, Any]:
         DEFAULT_SITE_BRANDING["logo_text"]
     )
     logo_image_src = str(get_app_config(conn, "site_logo_image_src") or "").strip() or None
+    favicon_image_src = str(get_app_config(conn, "site_favicon_image_src") or "").strip() or None
 
     if logo_mode not in ("text", "image"):
         logo_mode = "text"
@@ -393,6 +412,7 @@ def _get_site_branding(conn: Any) -> Dict[str, Any]:
         "logo_mode": logo_mode,
         "logo_text": logo_text,
         "logo_image_src": logo_image_src,
+        "favicon_image_src": favicon_image_src,
     }
 
 
@@ -405,20 +425,13 @@ def _upsert_site_branding(conn: Any, payload: SiteBrandingUpdateRequest) -> Dict
     if len(logo_text) > 80:
         raise HTTPException(status_code=400, detail="logo_text_too_long")
 
-    logo_image_src = str(payload.logo_image_src or "").strip() or None
-    if logo_image_src is not None:
-        if not (
-            logo_image_src.startswith("data:image/")
-            or logo_image_src.startswith("https://")
-            or logo_image_src.startswith("http://")
-        ):
-            raise HTTPException(status_code=400, detail="invalid_logo_image_src")
-        if len(logo_image_src) > 500000:
-            raise HTTPException(status_code=400, detail="logo_image_too_large")
+    logo_image_src = _validate_brand_image_src(payload.logo_image_src, error_prefix="logo")
+    favicon_image_src = _validate_brand_image_src(payload.favicon_image_src, error_prefix="favicon")
 
     upsert_app_config(conn, "site_logo_mode", logo_mode)
     upsert_app_config(conn, "site_logo_text", logo_text)
     upsert_app_config(conn, "site_logo_image_src", logo_image_src or "")
+    upsert_app_config(conn, "site_favicon_image_src", favicon_image_src or "")
     return _get_site_branding(conn)
 
 

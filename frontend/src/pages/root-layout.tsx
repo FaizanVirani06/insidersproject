@@ -2,6 +2,7 @@ import * as React from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 
 import { AnimatedBackground } from "@/components/animated-background";
+import { DocumentMetaManager } from "@/components/document-meta-manager";
 import { SiteBrandMark } from "@/components/site-brand-mark";
 import { TopNav } from "@/components/top-nav";
 import { SupportChatWidget } from "@/components/support-chat";
@@ -13,6 +14,7 @@ export function RootLayout() {
   return (
     <div className="relative min-h-screen bg-background text-foreground">
       <AnimatedBackground />
+      <DocumentMetaManager />
       <TopNav />
 
       <main className={isApp ? "mx-auto w-full max-w-screen-2xl px-4 py-8" : "container mx-auto px-4 py-10"}>

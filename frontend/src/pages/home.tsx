@@ -90,7 +90,7 @@ export function HomePage() {
                 Signals ranked by importance
               </span>
               <span className="rounded-full border border-zinc-800/80 bg-black/35 px-3 py-2">
-                Built from public SEC filings
+                Built from official, public data
               </span>
             </div>
           </div>
@@ -121,7 +121,7 @@ export function HomePage() {
               <div className="rounded-2xl border border-zinc-800/70 bg-black/40 p-4">
                 <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">For you</div>
                 <div className="mt-2 text-lg font-semibold text-zinc-100">Saved preferences</div>
-                <div className="mt-2 text-sm text-zinc-400">Choose sectors, trade side, and minimum AI score.</div>
+                <div className="mt-2 text-sm text-zinc-400">Create a custom feed of recommended insider trades.</div>
               </div>
               <div className="rounded-2xl border border-zinc-800/70 bg-black/40 p-4">
                 <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Trackers</div>
