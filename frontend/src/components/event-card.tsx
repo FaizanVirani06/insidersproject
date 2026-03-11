@@ -41,7 +41,7 @@ function buildMetrics(summary: EventSideSummary): Array<{ label: string; value: 
   if (summary.shares !== null) metrics.push({ label: `${summary.label} shares`, value: fmtInt(summary.shares) });
   if (summary.vwap !== null) metrics.push({ label: `${summary.label} avg`, value: fmtUsd(summary.vwap) });
   if (summary.pctHoldingsChange !== null) {
-    metrics.push({ label: "Holding change", value: fmtPercent(summary.pctHoldingsChange, { digits: 1 }) });
+    metrics.push({ label: "Holding change", value: fmtPercent(summary.pctHoldingsChange/100, { digits: 1 }) });
   }
   if (summary.aiRating !== null) metrics.push({ label: `${summary.label} AI`, value: fmtAiRating(summary.aiRating) });
 
