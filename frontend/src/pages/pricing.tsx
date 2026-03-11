@@ -9,16 +9,24 @@ type PricingDisplay = {
   yearly_usd: number;
 };
 
+type BillingPlansResponse = {
+  monthly?: string | null;
+  yearly?: string | null;
+  enabled?: boolean;
+  monthly_trial_days?: number;
+  monthly_trial_available?: boolean;
+};
+
+type CheckoutPlan = "monthly" | "yearly" | "trial";
+
 export function PricingPage() {
   const navigate = useNavigate();
 
-  const [loading, setLoading] = React.useState(false);
+  const [loadingPlan, setLoadingPlan] = React.useState<CheckoutPlan | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [billingCadence, setBillingCadence] = React.useState<"monthly" | "yearly">("yearly");
 
-  const [billingPlans, setBillingPlans] = React.useState<{ monthly: string | null; yearly: string | null } | null>(
-    null
-  );
+  const [billingPlans, setBillingPlans] = React.useState<BillingPlansResponse | null>(null);
   const [display, setDisplay] = React.useState<PricingDisplay | null>(null);
 
   React.useEffect(() => {
@@ -34,7 +42,14 @@ export function PricingPage() {
 
         if (plansRes.ok) {
           const p = await plansRes.json();
-          setBillingPlans({ monthly: p?.monthly ?? null, yearly: p?.yearly ?? null });
+          setBillingPlans({
+            monthly: p?.monthly ?? null,
+            yearly: p?.yearly ?? null,
+            enabled: Boolean(p?.enabled),
+            monthly_trial_days:
+              typeof p?.monthly_trial_days === "number" ? Math.max(0, p.monthly_trial_days) : 0,
+            monthly_trial_available: Boolean(p?.monthly_trial_available),
+          });
         }
         if (displayRes.ok) {
           const d = (await displayRes.json()) as PricingDisplay;
@@ -53,8 +68,11 @@ export function PricingPage() {
   const currency = display?.currency || "USD";
   const monthlyUsd = typeof display?.monthly_usd === "number" ? display!.monthly_usd : 25;
   const yearlyUsd = typeof display?.yearly_usd === "number" ? display!.yearly_usd : 200;
-  const monthlyAvailable = Boolean(billingPlans?.monthly);
-  const yearlyAvailable = Boolean(billingPlans?.yearly);
+  const billingEnabled = Boolean(billingPlans?.enabled);
+  const monthlyAvailable = Boolean(billingEnabled && billingPlans?.monthly);
+  const yearlyAvailable = Boolean(billingEnabled && billingPlans?.yearly);
+  const trialDays = Math.max(0, Number(billingPlans?.monthly_trial_days ?? 0));
+  const trialAvailable = Boolean(monthlyAvailable && billingPlans?.monthly_trial_available && trialDays > 0);
 
   const features = [
     "AI-rated Form 4 buy/sell signals",
@@ -66,8 +84,8 @@ export function PricingPage() {
     "In-app support chat",
   ];
 
-  const start = async (plan: "monthly" | "yearly") => {
-    setLoading(true);
+  const start = async (plan: CheckoutPlan) => {
+    setLoadingPlan(plan);
     setError(null);
     try {
       const res = await apiFetch("/billing/checkout-session", {
@@ -95,19 +113,20 @@ export function PricingPage() {
     } catch (e: any) {
       setError(e?.message || "Failed to start checkout");
     } finally {
-      setLoading(false);
+      setLoadingPlan(null);
     }
   };
 
   const activePrice = billingCadence === "monthly" ? monthlyUsd : yearlyUsd;
   const activeAvailable = billingCadence === "monthly" ? monthlyAvailable : yearlyAvailable;
+  const formatPrice = (amount: number) => (currency === "USD" ? `$${amount.toLocaleString()}` : `${amount.toLocaleString()} ${currency}`);
 
   return (
     <div className="mx-auto max-w-5xl space-y-10">
       <div className="text-center">
         <div className="badge">Simple pricing</div>
         <h1 className="mt-5 text-4xl font-bold tracking-tight">Unlock the dashboard and AI insights</h1>
-        <p className="mt-4 text-lg muted">Choose monthly or yearly. Cancel anytime.</p>
+        <p className="mt-4 text-lg muted">Choose monthly, yearly, or start with a free trial. Cancel anytime.</p>
       </div>
 
       <div className="glass-panel relative overflow-hidden p-8 sm:p-10">
@@ -138,10 +157,7 @@ export function PricingPage() {
             </div>
 
             <div className="mt-4 flex items-baseline gap-2">
-              <span className="text-4xl font-bold">
-                {currency === "USD" ? "$" : ""}
-                {activePrice.toLocaleString()}
-              </span>
+              <span className="text-4xl font-bold">{formatPrice(activePrice)}</span>
               <span className="text-sm muted">/ {billingCadence === "monthly" ? "month" : "year"}</span>
             </div>
             {currency !== "USD" && <div className="mt-2 text-xs muted">Currency: {currency}</div>}
@@ -150,12 +166,39 @@ export function PricingPage() {
             <button
               type="button"
               onClick={() => start(billingCadence)}
-              disabled={loading || !activeAvailable}
+              disabled={loadingPlan !== null || !activeAvailable}
               className="btn-primary mt-6 w-full"
               title={!activeAvailable ? "This plan is not configured" : undefined}
             >
-              {loading ? "Redirecting…" : activeAvailable ? "Subscribe" : "Plan unavailable"}
+              {loadingPlan === billingCadence
+                ? "Redirecting…"
+                : activeAvailable
+                  ? billingCadence === "monthly" && trialAvailable
+                    ? "Subscribe monthly now"
+                    : "Subscribe"
+                  : "Plan unavailable"}
             </button>
+
+            {trialAvailable && (
+              <div className="mt-5 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">7-day free trial</div>
+                  <span className="badge">New</span>
+                </div>
+                <p className="mt-2 text-sm muted">
+                  Get full access free for {trialDays} days. After the trial, billing continues at {formatPrice(monthlyUsd)}/month unless you cancel first.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => start("trial")}
+                  disabled={loadingPlan !== null}
+                  className="btn-secondary mt-4 w-full"
+                >
+                  {loadingPlan === "trial" ? `Redirecting…` : `Start ${trialDays}-day free trial`}
+                </button>
+                <div className="mt-2 text-xs muted">The trial rolls into the monthly plan automatically after the free period.</div>
+              </div>
+            )}
 
             <div className="mt-3 text-xs muted">
               Already have an account?{" "}

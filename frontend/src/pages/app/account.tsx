@@ -10,7 +10,11 @@ type PlansResponse = {
   monthly?: string | null;
   yearly?: string | null;
   enabled?: boolean;
+  monthly_trial_days?: number;
+  monthly_trial_available?: boolean;
 };
+
+type CheckoutPlan = "monthly" | "yearly" | "trial";
 
 export function AccountPage() {
   const { user, refresh } = useAuth();
@@ -32,7 +36,16 @@ export function AccountPage() {
           return;
         }
         const p = (await res.json()) as PlansResponse;
-        if (!cancelled) setPlans(p);
+        if (!cancelled) {
+          setPlans({
+            monthly: p?.monthly ?? null,
+            yearly: p?.yearly ?? null,
+            enabled: Boolean(p?.enabled),
+            monthly_trial_days:
+              typeof p?.monthly_trial_days === "number" ? Math.max(0, p.monthly_trial_days) : 0,
+            monthly_trial_available: Boolean(p?.monthly_trial_available),
+          });
+        }
       } catch {
         if (!cancelled) setPlans({ enabled: false });
       } finally {
@@ -47,16 +60,19 @@ export function AccountPage() {
   React.useEffect(() => {
     const c = (sp.get("checkout") || "").toLowerCase();
     if (c === "success") {
-      setMsg("Payment successful — refreshing your subscription status…");
+      setMsg("Checkout successful — refreshing your subscription status…");
       refresh();
     }
   }, [sp, refresh]);
 
   const isShowcase = user?.role === "showcase";
   const isPaid = Boolean((user as any)?.is_paid) || user?.role === "admin" || isShowcase;
-  const status = (user as any)?.subscription_status || "";
+  const status = String((user as any)?.subscription_status || "").toLowerCase();
+  const isTrialing = status === "trialing";
+  const trialDays = Math.max(0, Number(plans.monthly_trial_days ?? 0));
+  const trialAvailable = Boolean(plans.enabled && plans.monthly && plans.monthly_trial_available && trialDays > 0);
 
-  const startCheckout = async (plan: "monthly" | "yearly") => {
+  const startCheckout = async (plan: CheckoutPlan) => {
     setBusy(plan);
     setError(null);
     setMsg(null);
@@ -130,6 +146,10 @@ export function AccountPage() {
                 <span className="inline-flex items-center rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-cyan-700 dark:text-cyan-300">
                   Showcase access
                 </span>
+              ) : isTrialing ? (
+                <span className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-emerald-700 dark:text-emerald-300">
+                  Trial active
+                </span>
               ) : isPaid ? (
                 <span className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-emerald-700 dark:text-emerald-300">
                   Active
@@ -142,7 +162,7 @@ export function AccountPage() {
             </div>
             {status && <div className="mt-1 text-xs muted">Status: {String(status)}</div>}
             {(user as any)?.current_period_end && (
-              <div className="mt-1 text-xs muted">Renews: {String((user as any).current_period_end)}</div>
+              <div className="mt-1 text-xs muted">{isTrialing ? "Trial ends" : "Renews"}: {String((user as any).current_period_end)}</div>
             )}
           </div>
         </div>
@@ -154,13 +174,24 @@ export function AccountPage() {
 
           {!isShowcase && !loadingPlans && plans.enabled && !isPaid && (
             <>
+              {trialAvailable && (
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => startCheckout("trial")}
+                  className="btn-primary"
+                >
+                  {busy === "trial" ? "Redirecting…" : `Start ${trialDays}-day free trial`}
+                </button>
+              )}
+
               <button
                 type="button"
                 disabled={!plans.monthly || busy !== null}
                 onClick={() => startCheckout("monthly")}
-                className="btn-primary"
+                className={trialAvailable ? "btn-secondary" : "btn-primary"}
               >
-                {busy === "monthly" ? "Redirecting…" : "Subscribe monthly"}
+                {busy === "monthly" ? "Redirecting…" : trialAvailable ? "Subscribe monthly now" : "Subscribe monthly"}
               </button>
 
               <button
@@ -180,6 +211,12 @@ export function AccountPage() {
             </button>
           )}
         </div>
+
+        {!isShowcase && !loadingPlans && plans.enabled && !isPaid && trialAvailable && (
+          <div className="mt-4 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-800 dark:text-emerald-200">
+            The trial unlocks the full dashboard immediately, then rolls into the monthly plan after {trialDays} days unless you cancel.
+          </div>
+        )}
 
         {loadingPlans && <div className="mt-4 text-sm muted">Loading billing…</div>}
 

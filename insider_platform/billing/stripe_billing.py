@@ -45,6 +45,7 @@ def create_checkout_session(
     cancel_url: str,
     customer_id: str | None = None,
     customer_email: str | None = None,
+    trial_days: int = 0,
 ) -> str:
     """Create a Stripe Checkout Session URL for a subscription."""
     stripe = _get_stripe(cfg)
@@ -66,6 +67,9 @@ def create_checkout_session(
     elif customer_email:
         # Checkout will create a customer automatically.
         params["customer_email"] = customer_email
+
+    if int(trial_days or 0) > 0:
+        params["subscription_data"] = {"trial_period_days": int(trial_days)}
 
     session = stripe.checkout.Session.create(**params)
     url = session.get("url")

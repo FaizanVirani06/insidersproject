@@ -176,6 +176,10 @@ class Config:
     STRIPE_PRICE_ID_MONTHLY: str | None = os.environ.get("STRIPE_PRICE_ID_MONTHLY")
     STRIPE_PRICE_ID_YEARLY: str | None = os.environ.get("STRIPE_PRICE_ID_YEARLY")
 
+    # Optional monthly free trial shown on the pricing page / Checkout.
+    # Set to 0 to disable the trial CTA without changing code.
+    STRIPE_MONTHLY_TRIAL_DAYS: int = max(0, int(os.environ.get("STRIPE_MONTHLY_TRIAL_DAYS", "7")))
+
     # Optional: allow a free internal bypass for development.
     # If set to 1, users are treated as paid even without an active Stripe subscription.
     BILLING_DEV_BYPASS: bool = _env_bool("BILLING_DEV_BYPASS", False) is True

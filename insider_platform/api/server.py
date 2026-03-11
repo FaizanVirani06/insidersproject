@@ -1011,7 +1011,7 @@ def admin_upsert_showcase_user(
 
 
 class CheckoutSessionRequest(BaseModel):
-    plan: str = "monthly"  # monthly|yearly
+    plan: str = "monthly"  # monthly|yearly|trial
 
 
 class PricingDisplayUpdateRequest(BaseModel):
@@ -1118,10 +1118,14 @@ def admin_update_pricing_display(
 @app.get("/billing/plans")
 def billing_plans() -> Dict[str, Any]:
     """Expose configured plan price IDs so the frontend can render pricing."""
+    billing_enabled = bool(cfg.STRIPE_SECRET_KEY and (cfg.STRIPE_PRICE_ID_MONTHLY or cfg.STRIPE_PRICE_ID_YEARLY))
+    monthly_trial_days = max(int(cfg.STRIPE_MONTHLY_TRIAL_DAYS or 0), 0)
     return {
         "monthly": cfg.STRIPE_PRICE_ID_MONTHLY,
         "yearly": cfg.STRIPE_PRICE_ID_YEARLY,
-        "enabled": bool(cfg.STRIPE_SECRET_KEY and (cfg.STRIPE_PRICE_ID_MONTHLY or cfg.STRIPE_PRICE_ID_YEARLY)),
+        "enabled": billing_enabled,
+        "monthly_trial_days": monthly_trial_days,
+        "monthly_trial_available": bool(billing_enabled and cfg.STRIPE_PRICE_ID_MONTHLY and monthly_trial_days > 0),
     }
 
 
@@ -1142,10 +1146,18 @@ def billing_checkout_session(
     """Create a Stripe Checkout session for the logged-in user."""
     _reject_showcase_mutation(user)
     plan = (payload.plan or "monthly").strip().lower()
-    if plan not in ("monthly", "yearly"):
+    if plan not in ("monthly", "yearly", "trial", "trial_monthly"):
         raise HTTPException(status_code=400, detail="invalid_plan")
 
-    price_id = cfg.STRIPE_PRICE_ID_MONTHLY if plan == "monthly" else cfg.STRIPE_PRICE_ID_YEARLY
+    trial_days = 0
+    if plan in ("trial", "trial_monthly"):
+        price_id = cfg.STRIPE_PRICE_ID_MONTHLY
+        trial_days = max(int(cfg.STRIPE_MONTHLY_TRIAL_DAYS or 0), 0)
+        if trial_days <= 0:
+            raise HTTPException(status_code=400, detail="trial_not_configured")
+    else:
+        price_id = cfg.STRIPE_PRICE_ID_MONTHLY if plan == "monthly" else cfg.STRIPE_PRICE_ID_YEARLY
+
     if not price_id:
         raise HTTPException(status_code=400, detail="plan_not_configured")
 
@@ -1162,6 +1174,7 @@ def billing_checkout_session(
             cancel_url=cancel_url,
             customer_id=(user.get("stripe_customer_id") or None),
             customer_email=str(user.get("username")) if user.get("username") else None,
+            trial_days=trial_days,
         )
         return {"url": url}
     except RuntimeError as e:
