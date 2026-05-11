@@ -17,6 +17,8 @@ from insider_platform.jobs.queue import enqueue_job
 from insider_platform.compute.trade_plan import compute_trade_plan_for_event
 
 from insider_platform.auth import get_current_user, require_admin, require_admin_viewer, require_subscription
+from insider_platform.entitlements import build_entitlements, get_result_limit_for_user, has_full_access
+from insider_platform.social.x_client import XSettings, ensure_disclaimer, post_to_x
 from insider_platform.auth.crud import (
     bootstrap_admin_if_needed,
     create_user,
@@ -2665,3 +2667,115 @@ def admin_regenerate_ai(
         "event_key": {"issuer_cik": cik, "owner_key": owner_key, "accession_number": acc},
         "force": bool(payload.force),
     }
+
+class SocialPostRequest(BaseModel):
+    content: str | None = None
+    link_url: str | None = None
+    source_signal_id: str | None = None
+
+
+@app.get("/me/entitlements")
+def me_entitlements(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    return build_entitlements(user)
+
+
+@app.get("/signals/best-performing")
+def best_performing_signals(
+    days: int = Query(60, ge=1, le=365),
+    limit: int = Query(50, ge=1, le=200),
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    start_date = (date.today() - timedelta(days=int(days))).isoformat()
+    hard_limit = int(limit)
+    free_limit = get_result_limit_for_user(user, "best_performing_signals")
+    if free_limit is not None:
+        hard_limit = min(hard_limit, free_limit)
+    with connect(cfg.DB_DSN) as conn:
+        rows = conn.execute(
+            """
+            WITH latest_prices AS (
+              SELECT symbol, MAX(date) AS latest_date
+              FROM price_daily
+              GROUP BY symbol
+            )
+            SELECT
+              e.issuer_cik, e.owner_key, e.accession_number, e.ticker, im.issuer_name,
+              e.filing_date, e.event_trade_date AS transaction_date,
+              COALESCE(NULLIF(e.filing_date,''), NULLIF(e.event_trade_date,'')) AS signal_date,
+              e.owner_name_display AS insider_name,
+              e.owner_title AS insider_role,
+              CASE WHEN e.has_buy=1 THEN 'P' WHEN e.has_sell=1 THEN 'S' ELSE NULL END AS transaction_code,
+              COALESCE(e.buy_dollars_total, e.sell_dollars_total) AS transaction_dollar_value,
+              COALESCE(e.buy_shares_total, e.sell_shares_total) AS shares,
+              COALESCE(e.buy_vwap_price, e.sell_vwap_price) AS transaction_price,
+              GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1)) AS signal_score,
+              COALESCE(e.cluster_flag_buy, e.cluster_flag_sell, 0) AS cluster_flag,
+              p0.close AS starting_price,
+              p1.close AS latest_price,
+              (((p1.close / NULLIF(p0.close,0)) - 1.0) * 100.0) AS percent_return,
+              GREATEST(0, (CURRENT_DATE - (COALESCE(NULLIF(e.filing_date,''), NULLIF(e.event_trade_date,''))::date))) AS days_elapsed
+            FROM insider_events e
+            LEFT JOIN issuer_master im ON im.issuer_cik=e.issuer_cik
+            JOIN price_daily p0 ON p0.symbol = e.ticker AND p0.date = COALESCE(NULLIF(e.filing_date,''), NULLIF(e.event_trade_date,''))
+            JOIN latest_prices lp ON lp.symbol = e.ticker
+            JOIN price_daily p1 ON p1.symbol = lp.symbol AND p1.date = lp.latest_date
+            WHERE COALESCE(NULLIF(e.filing_date,''), NULLIF(e.event_trade_date,'')) >= ?
+              AND e.ticker IS NOT NULL AND BTRIM(e.ticker) <> ''
+            ORDER BY percent_return DESC
+            LIMIT ?
+            """,
+            (start_date, hard_limit),
+        ).fetchall()
+    out=[]
+    for r in rows:
+        d=dict(r)
+        d["signal_id"] = f"{d.get('issuer_cik')}:{d.get('owner_key')}:{d.get('accession_number')}"
+        d["detail_path"] = f"/app/event/{d.get('issuer_cik')}/{d.get('owner_key')}/{d.get('accession_number')}"
+        out.append(d)
+    return {"days": days, "limit": hard_limit, "is_limited": free_limit is not None, "results": out}
+
+
+@app.post("/admin/social/x/preview")
+def preview_x_post(payload: SocialPostRequest, user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    content = (payload.content or "").strip()
+    if not content and payload.source_signal_id:
+        content = f"Unusual insider activity detected: signal {payload.source_signal_id}"
+    return {"content": ensure_disclaimer(content)}
+
+
+@app.post("/admin/social/x/post")
+def post_x(payload: SocialPostRequest, user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    content = (payload.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content_required")
+    settings = XSettings(cfg.X_API_KEY, cfg.X_API_SECRET, cfg.X_ACCESS_TOKEN, cfg.X_ACCESS_TOKEN_SECRET, cfg.X_POSTING_ENABLED, cfg.X_HANDLE)
+    now = utcnow_iso()
+    status = "failed"
+    tweet_id = None
+    tweet_url = None
+    error = None
+    final_content = ensure_disclaimer(content)
+    try:
+        posted = post_to_x(settings, final_content)
+        status = posted.get("status") or "posted"
+        tweet_id = posted.get("tweet_id")
+        tweet_url = posted.get("tweet_url")
+        final_content = posted.get("content") or final_content
+    except Exception as e:
+        error = str(e)
+    with connect(cfg.DB_DSN) as conn:
+        row = conn.execute(
+            """INSERT INTO social_posts (platform,status,content,link_url,x_tweet_id,x_tweet_url,error_message,source_signal_id,created_by_user_id,created_at,posted_at)
+            VALUES ('x',?,?,?,?,?,?,?,?,?,?) RETURNING *""",
+            (status, final_content, payload.link_url, tweet_id, tweet_url, error, payload.source_signal_id, int(user["user_id"]), now, now if status in ("posted","dry_run") else None),
+        ).fetchone()
+    if error:
+        raise HTTPException(status_code=400, detail={"error": error, "post": dict(row)})
+    return {"post": dict(row)}
+
+
+@app.get("/admin/social/posts")
+def list_social_posts(limit: int = Query(30, ge=1, le=200), user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    with connect(cfg.DB_DSN) as conn:
+        rows = conn.execute("SELECT * FROM social_posts ORDER BY created_at DESC LIMIT ?", (int(limit),)).fetchall()
+    return {"posts": [dict(r) for r in rows]}

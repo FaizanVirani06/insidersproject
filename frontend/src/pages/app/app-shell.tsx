@@ -59,6 +59,7 @@ export function AppShell() {
               <NavItem to="/app/for-you" label="For you" subtitle="Saved signal feed" />
               <NavItem to="/app/tickers" label="Tickers" subtitle="Browse company activity" />
               <NavItem to="/app/events" label="Events" subtitle="Recent insider filings" />
+              <NavItem to="/app/signals/best-performing" label="Best performing" subtitle="60-day leaderboard" />
               <NavItem to="/app/feedback" label="Feedback" subtitle="Tell us what to improve" />
             </div>
           </div>
@@ -81,6 +82,7 @@ export function AppShell() {
                 <NavItem to="/app/admin/feedback" label="Feedback inbox" subtitle="Customer feedback" />
                 <NavItem to="/app/admin/support" label="Support" subtitle={isShowcase ? "Read-only inbox view" : "Conversations and replies"} />
                 <NavItem to="/app/admin/settings" label="Site settings" subtitle={isShowcase ? "Read-only config view" : "Pricing and config"} />
+                {isAdmin ? <NavItem to="/app/admin/social" label="Social posting" subtitle="Post research signals to X" /> : null}
               </div>
             </div>
           ) : null}

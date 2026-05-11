@@ -23,6 +23,8 @@ import { ProfilePage } from "@/pages/app/profile";
 import { RecommendationsPage } from "@/pages/app/recommendations";
 import { TickerDetailPage } from "@/pages/app/ticker-detail";
 import { TickersPage } from "@/pages/app/tickers";
+import { BestPerformingSignalsPage } from "@/pages/app/best-performing-signals";
+import { AdminSocialPage } from "@/pages/app/admin-social";
 import { AdminUsersPage } from "@/pages/admin/users";
 
 function NotFound() {
@@ -57,6 +59,7 @@ export function App() {
           <Route index element={<Navigate to="for-you" replace />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="account" element={<AccountPage />} />
+          <Route path="signals/best-performing" element={<BestPerformingSignalsPage />} />
 
           {/* Subscription-gated routes */}
           <Route element={<RequireSubscription />}>
@@ -77,6 +80,7 @@ export function App() {
             <Route path="admin/feedback" element={<AdminFeedbackPage />} />
             <Route path="admin/support" element={<AdminSupportPage />} />
             <Route path="admin/settings" element={<AdminSettingsPage />} />
+            <Route path="admin/social" element={<AdminSocialPage />} />
           </Route>
         </Route>
 

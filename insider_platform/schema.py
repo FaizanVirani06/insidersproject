@@ -459,7 +459,25 @@ CREATE TABLE IF NOT EXISTS issuer_news (
     fetched_at TEXT NOT NULL,
     PRIMARY KEY (ticker, url)
 );
-CREATE INDEX IF NOT EXISTS idx_news_ticker_published ON issuer_news (ticker, published_at);"""
+CREATE INDEX IF NOT EXISTS idx_news_ticker_published ON issuer_news (ticker, published_at);
+
+CREATE TABLE IF NOT EXISTS social_posts (
+    post_id BIGSERIAL PRIMARY KEY,
+    platform TEXT NOT NULL DEFAULT 'x',
+    status TEXT NOT NULL CHECK (status IN ('draft','posted','failed','dry_run')),
+    content TEXT NOT NULL,
+    link_url TEXT,
+    x_tweet_id TEXT,
+    x_tweet_url TEXT,
+    error_message TEXT,
+    source_signal_id TEXT,
+    created_by_user_id BIGINT,
+    created_at TEXT NOT NULL,
+    posted_at TEXT,
+    FOREIGN KEY (created_by_user_id) REFERENCES users(user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_social_posts_created ON social_posts (created_at DESC);
+"""
 
 
 def get_schema_sql() -> str:
