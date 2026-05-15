@@ -20,6 +20,8 @@ export function AdminSocialPage() {
   const [posts, setPosts] = React.useState<any[]>([]);
   const [signal, setSignal] = React.useState<any>(null);
   const [prices, setPrices] = React.useState<PricePoint[]>([]);
+  const [notice, setNotice] = React.useState<string>("");
+  const [error, setError] = React.useState<string>("");
 
   const load = () =>
     apiFetch("/admin/social/posts")
@@ -62,11 +64,33 @@ export function AdminSocialPage() {
   };
 
   const doPost = async () => {
-    await apiFetch("/admin/social/x/post", {
+    setNotice("");
+    setError("");
+    const res = await apiFetch("/admin/social/x/post", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ content, link_url: linkUrl, source_signal_id: sourceSignalId }),
     });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail = (body as any)?.detail;
+      const msg =
+        typeof detail === "string"
+          ? detail
+          : typeof detail?.error === "string"
+            ? detail.error
+            : "Failed to post to X";
+      setError(msg);
+      return;
+    }
+    const status = String((body as any)?.post?.status || "");
+    if (status === "dry_run") {
+      setNotice("Dry-run mode: chart + post were prepared but not published. Set X_POSTING_ENABLED=1 for live posting.");
+    } else if (status === "posted") {
+      setNotice("Posted to X successfully, including chart attachment when available.");
+    } else {
+      setNotice(`Post finished with status: ${status || "unknown"}`);
+    }
     load();
   };
 
@@ -96,6 +120,8 @@ export function AdminSocialPage() {
         <button className="btn-secondary" onClick={doPreview}>Preview</button>
         <button className="btn-primary" onClick={doPost}>Post to X</button>
       </div>
+      {notice ? <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">{notice}</div> : null}
+      {error ? <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</div> : null}
 
       {preview ? <div className="glass-card whitespace-pre-wrap p-4">{preview}</div> : null}
 
