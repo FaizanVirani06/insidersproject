@@ -42,7 +42,9 @@ export function AdminSocialPage() {
 
     if (j?.signal?.ticker && j?.signal?.filing_date) {
       const end = new Date().toISOString().slice(0, 10);
-      const start = j.signal.filing_date.slice(0, 10);
+      const filingDate = new Date(j.signal.filing_date.slice(0, 10) + "T00:00:00Z");
+      filingDate.setUTCDate(filingDate.getUTCDate() - 5);
+      const start = filingDate.toISOString().slice(0, 10);
       const pr = await apiFetch(`/ticker/${encodeURIComponent(j.signal.ticker)}/prices?start=${start}&end=${end}&limit=800`);
       const pj = await pr.json();
       setPrices((pj?.prices || []) as PricePoint[]);
