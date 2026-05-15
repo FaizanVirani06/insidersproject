@@ -2668,6 +2668,63 @@ def admin_regenerate_ai(
         "force": bool(payload.force),
     }
 
+
+class SocialTemplateRequest(BaseModel):
+    mode: str = "new_signal"  # new_signal|best_performing
+    source_signal_id: str
+
+
+def _get_signal_row_for_social(conn: Any, source_signal_id: str) -> Dict[str, Any] | None:
+    try:
+        cik, owner_key, acc = [x.strip() for x in str(source_signal_id).split(":", 2)]
+    except Exception:
+        return None
+    row = conn.execute(
+        """
+        SELECT e.issuer_cik, e.owner_key, e.accession_number, e.ticker, e.filing_date, e.event_trade_date,
+               e.owner_name_display, e.owner_title,
+               COALESCE(e.buy_dollars_total, e.sell_dollars_total) AS transaction_dollar_value,
+               CASE WHEN e.has_buy=1 THEN 'BUY' WHEN e.has_sell=1 THEN 'SELL' ELSE 'SIGNAL' END AS signal_side,
+               GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1)) AS signal_score,
+               im.issuer_name
+        FROM insider_events e
+        LEFT JOIN issuer_master im ON im.issuer_cik=e.issuer_cik
+        WHERE e.issuer_cik=? AND e.owner_key=? AND e.accession_number=?
+        """,
+        (cik, owner_key, acc),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _build_social_template(signal: Dict[str, Any], mode: str) -> str:
+    ticker = str(signal.get("ticker") or "").upper()
+    company = str(signal.get("issuer_name") or "").strip()
+    insider = str(signal.get("owner_name_display") or "Insider")
+    role = str(signal.get("owner_title") or "")
+    filed = str(signal.get("filing_date") or "")[:10]
+    score = signal.get("signal_score")
+    dollars = signal.get("transaction_dollar_value")
+    side = str(signal.get("signal_side") or "SIGNAL")
+    promo = "Try InsidrsAI free trial: https://insidrsai.com/pricing"
+    if mode == "best_performing":
+        head = f"Top performing insider signal: ${ticker}"
+    else:
+        head = f"New insider {side.lower()} signal detected: ${ticker}"
+    lines = [head]
+    if company:
+        lines.append(company)
+    detail = f"{insider}{(' / ' + role) if role else ''}"
+    lines.append(detail)
+    if dollars:
+        lines.append(f"Transaction value: ~${float(dollars):,.0f}")
+    if score is not None and float(score) >= 0:
+        lines.append(f"Signal score: {float(score):.1f}/10")
+    if filed:
+        lines.append(f"Filed: {filed}")
+    lines.append(promo)
+    lines.append("Research signal only. Not financial advice.")
+    return "\n".join(lines)
+
 class SocialPostRequest(BaseModel):
     content: str | None = None
     link_url: str | None = None
@@ -2757,6 +2814,19 @@ def best_performing_signals(
         out.append(d)
     return {"days": days, "limit": hard_limit, "is_limited": free_limit is not None, "results": out}
 
+
+
+@app.post("/admin/social/x/template")
+def social_x_template(payload: SocialTemplateRequest, user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    mode = (payload.mode or "new_signal").strip().lower()
+    if mode not in ("new_signal", "best_performing"):
+        raise HTTPException(status_code=400, detail="invalid_mode")
+    with connect(cfg.DB_DSN) as conn:
+        signal = _get_signal_row_for_social(conn, payload.source_signal_id)
+    if not signal:
+        raise HTTPException(status_code=404, detail="source_signal_not_found")
+    content = _build_social_template(signal, mode=mode)
+    return {"content": ensure_disclaimer(content), "signal": signal}
 
 @app.post("/admin/social/x/preview")
 def preview_x_post(payload: SocialPostRequest, user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
