@@ -18,7 +18,8 @@ from insider_platform.compute.trade_plan import compute_trade_plan_for_event
 
 from insider_platform.auth import get_current_user, require_admin, require_admin_viewer, require_subscription
 from insider_platform.entitlements import build_entitlements, get_result_limit_for_user, has_full_access
-from insider_platform.social.x_client import XSettings, ensure_disclaimer, post_to_x
+from insider_platform.social.chart_render import render_signal_return_chart_png
+from insider_platform.social.x_client import XSettings, ensure_disclaimer, post_to_x, post_to_x_with_media, upload_media_to_x
 from insider_platform.auth.crud import (
     bootstrap_admin_if_needed,
     create_user,
@@ -2696,6 +2697,47 @@ def _get_signal_row_for_social(conn: Any, source_signal_id: str) -> Dict[str, An
     return dict(row) if row else None
 
 
+def _load_signal_chart_payload(conn: Any, signal: Dict[str, Any]) -> Dict[str, Any] | None:
+    issuer_cik = str(signal.get("issuer_cik") or "").strip()
+    if not issuer_cik:
+        return None
+    signal_date = str(signal.get("filing_date") or signal.get("event_trade_date") or "").strip()[:10]
+    if not signal_date:
+        return None
+    start = (date.fromisoformat(signal_date) - timedelta(days=5)).isoformat()
+    rows = conn.execute(
+        """
+        SELECT date, adj_close
+        FROM issuer_prices_daily
+        WHERE issuer_cik=? AND date>=? AND adj_close IS NOT NULL
+        ORDER BY date ASC
+        LIMIT 800
+        """,
+        (issuer_cik, start),
+    ).fetchall()
+    if not rows:
+        return None
+    prices = [float(r["adj_close"]) for r in rows]
+    dates = [str(r["date"]) for r in rows]
+    start_idx = 0
+    for i, d in enumerate(dates):
+        if d >= signal_date:
+            start_idx = i
+            break
+    signal_price = prices[start_idx]
+    latest_price = prices[-1]
+    ret = ((latest_price / signal_price) - 1.0) * 100.0 if signal_price else 0.0
+    return {
+        "ticker": str(signal.get("ticker") or ""),
+        "dates": dates,
+        "prices": prices,
+        "signal_date": dates[start_idx],
+        "signal_price": signal_price,
+        "latest_price": latest_price,
+        "return_pct": ret,
+    }
+
+
 def _build_social_template(signal: Dict[str, Any], mode: str) -> str:
     ticker = str(signal.get("ticker") or "").upper()
     company = str(signal.get("issuer_name") or "").strip()
@@ -2849,7 +2891,15 @@ def post_x(payload: SocialPostRequest, user: Dict[str, Any] = Depends(require_ad
     error = None
     final_content = ensure_disclaimer(content)
     try:
-        posted = post_to_x(settings, final_content)
+        media_id = None
+        if payload.source_signal_id:
+            with connect(cfg.DB_DSN) as conn:
+                srow = _get_signal_row_for_social(conn, payload.source_signal_id)
+                cdata = _load_signal_chart_payload(conn, srow) if srow else None
+            if cdata:
+                png = render_signal_return_chart_png(**cdata)
+                media_id = upload_media_to_x(settings, png)
+        posted = post_to_x_with_media(settings, final_content, media_id=media_id)
         status = posted.get("status") or "posted"
         tweet_id = posted.get("tweet_id")
         tweet_url = posted.get("tweet_url")
