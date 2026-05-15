@@ -2690,45 +2690,68 @@ def best_performing_signals(
     free_limit = get_result_limit_for_user(user, "best_performing_signals")
     if free_limit is not None:
         hard_limit = min(hard_limit, free_limit)
+
     with connect(cfg.DB_DSN) as conn:
         rows = conn.execute(
             """
-            WITH latest_prices AS (
-              SELECT symbol, MAX(date) AS latest_date
-              FROM price_daily
-              GROUP BY symbol
+            WITH event_base AS (
+              SELECT
+                e.issuer_cik, e.owner_key, e.accession_number, e.ticker, im.issuer_name,
+                e.filing_date, e.event_trade_date AS transaction_date,
+                COALESCE(NULLIF(e.filing_date,''), NULLIF(e.event_trade_date,'')) AS signal_date,
+                e.owner_name_display AS insider_name,
+                e.owner_title AS insider_role,
+                CASE WHEN e.has_buy=1 THEN 'P' WHEN e.has_sell=1 THEN 'S' ELSE NULL END AS transaction_code,
+                COALESCE(e.buy_dollars_total, e.sell_dollars_total) AS transaction_dollar_value,
+                COALESCE(e.buy_shares_total, e.sell_shares_total) AS shares,
+                COALESCE(e.buy_vwap_price, e.sell_vwap_price) AS transaction_price,
+                GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1)) AS signal_score,
+                COALESCE(e.cluster_flag_buy, e.cluster_flag_sell, 0) AS cluster_flag
+              FROM insider_events e
+              LEFT JOIN issuer_master im ON im.issuer_cik=e.issuer_cik
+              WHERE COALESCE(NULLIF(e.filing_date,''), NULLIF(e.event_trade_date,'')) >= ?
+                AND e.ticker IS NOT NULL AND BTRIM(e.ticker) <> ''
+            ), priced AS (
+              SELECT
+                b.*,
+                sp0.date AS start_date_used,
+                sp0.adj_close AS starting_price,
+                sp1.date AS latest_date_used,
+                sp1.adj_close AS latest_price
+              FROM event_base b
+              JOIN LATERAL (
+                SELECT p.date, p.adj_close
+                FROM issuer_prices_daily p
+                WHERE p.issuer_cik = b.issuer_cik
+                  AND p.date >= b.signal_date
+                  AND p.adj_close IS NOT NULL
+                ORDER BY p.date ASC
+                LIMIT 1
+              ) sp0 ON TRUE
+              JOIN LATERAL (
+                SELECT p.date, p.adj_close
+                FROM issuer_prices_daily p
+                WHERE p.issuer_cik = b.issuer_cik
+                  AND p.adj_close IS NOT NULL
+                ORDER BY p.date DESC
+                LIMIT 1
+              ) sp1 ON TRUE
             )
             SELECT
-              e.issuer_cik, e.owner_key, e.accession_number, e.ticker, im.issuer_name,
-              e.filing_date, e.event_trade_date AS transaction_date,
-              COALESCE(NULLIF(e.filing_date,''), NULLIF(e.event_trade_date,'')) AS signal_date,
-              e.owner_name_display AS insider_name,
-              e.owner_title AS insider_role,
-              CASE WHEN e.has_buy=1 THEN 'P' WHEN e.has_sell=1 THEN 'S' ELSE NULL END AS transaction_code,
-              COALESCE(e.buy_dollars_total, e.sell_dollars_total) AS transaction_dollar_value,
-              COALESCE(e.buy_shares_total, e.sell_shares_total) AS shares,
-              COALESCE(e.buy_vwap_price, e.sell_vwap_price) AS transaction_price,
-              GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1)) AS signal_score,
-              COALESCE(e.cluster_flag_buy, e.cluster_flag_sell, 0) AS cluster_flag,
-              p0.close AS starting_price,
-              p1.close AS latest_price,
-              (((p1.close / NULLIF(p0.close,0)) - 1.0) * 100.0) AS percent_return,
-              GREATEST(0, (CURRENT_DATE - (COALESCE(NULLIF(e.filing_date,''), NULLIF(e.event_trade_date,''))::date))) AS days_elapsed
-            FROM insider_events e
-            LEFT JOIN issuer_master im ON im.issuer_cik=e.issuer_cik
-            JOIN price_daily p0 ON p0.symbol = e.ticker AND p0.date = COALESCE(NULLIF(e.filing_date,''), NULLIF(e.event_trade_date,''))
-            JOIN latest_prices lp ON lp.symbol = e.ticker
-            JOIN price_daily p1 ON p1.symbol = lp.symbol AND p1.date = lp.latest_date
-            WHERE COALESCE(NULLIF(e.filing_date,''), NULLIF(e.event_trade_date,'')) >= ?
-              AND e.ticker IS NOT NULL AND BTRIM(e.ticker) <> ''
+              *,
+              (((latest_price / NULLIF(starting_price,0)) - 1.0) * 100.0) AS percent_return,
+              GREATEST(0, (CURRENT_DATE - (signal_date::date))) AS days_elapsed
+            FROM priced
+            WHERE starting_price IS NOT NULL AND latest_price IS NOT NULL
             ORDER BY percent_return DESC
             LIMIT ?
             """,
             (start_date, hard_limit),
         ).fetchall()
-    out=[]
+
+    out = []
     for r in rows:
-        d=dict(r)
+        d = dict(r)
         d["signal_id"] = f"{d.get('issuer_cik')}:{d.get('owner_key')}:{d.get('accession_number')}"
         d["detail_path"] = f"/app/event/{d.get('issuer_cik')}/{d.get('owner_key')}/{d.get('accession_number')}"
         out.append(d)
