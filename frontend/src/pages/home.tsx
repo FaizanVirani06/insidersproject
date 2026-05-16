@@ -68,7 +68,7 @@ function BestPerformingPreview({ user }: { user: any }) {
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(34,197,94,0.16),transparent_34%),radial-gradient(circle_at_top_right,rgba(34,211,238,0.14),transparent_32%)]" />
       <div className="relative grid gap-5 lg:grid-cols-[minmax(0,0.72fr)_minmax(420px,1fr)] lg:items-center">
         <div className="px-1 py-1 sm:px-3">
-          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Live product preview</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Live preview</div>
           <h2 className="mt-3 max-w-2xl text-3xl font-semibold tracking-tight text-zinc-50 sm:text-4xl">
             The insider signals that have moved the most.
           </h2>
