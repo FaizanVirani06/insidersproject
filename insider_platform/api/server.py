@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -18,8 +19,7 @@ from insider_platform.compute.trade_plan import compute_trade_plan_for_event
 
 from insider_platform.auth import get_current_user, require_admin, require_admin_viewer, require_subscription
 from insider_platform.entitlements import build_entitlements, get_result_limit_for_user, has_full_access
-from insider_platform.social.chart_render import render_signal_return_chart_png
-from insider_platform.social.x_client import XSettings, ensure_disclaimer, post_to_x, post_to_x_with_media, upload_media_to_x
+from insider_platform.social.x_client import XSettings, ensure_disclaimer, post_to_x_with_media, upload_media_to_x
 from insider_platform.auth.crud import (
     bootstrap_admin_if_needed,
     create_user,
@@ -2771,6 +2771,7 @@ class SocialPostRequest(BaseModel):
     content: str | None = None
     link_url: str | None = None
     source_signal_id: str | None = None
+    chart_image_data_url: str | None = None
 
 
 @app.get("/me/entitlements")
@@ -2865,17 +2866,32 @@ def social_x_template(payload: SocialTemplateRequest, user: Dict[str, Any] = Dep
         raise HTTPException(status_code=400, detail="invalid_mode")
     with connect(cfg.DB_DSN) as conn:
         signal = _get_signal_row_for_social(conn, payload.source_signal_id)
+        chart = _load_signal_chart_payload(conn, signal) if signal else None
     if not signal:
         raise HTTPException(status_code=404, detail="source_signal_not_found")
     content = _build_social_template(signal, mode=mode)
-    return {"content": ensure_disclaimer(content), "signal": signal}
+    return {"content": ensure_disclaimer(content), "signal": signal, "chart": chart}
 
 @app.post("/admin/social/x/preview")
 def preview_x_post(payload: SocialPostRequest, user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     content = (payload.content or "").strip()
     if not content and payload.source_signal_id:
         content = f"Unusual insider activity detected: signal {payload.source_signal_id}"
-    return {"content": ensure_disclaimer(content)}
+    return {"content": ensure_disclaimer(content), "has_chart": bool(payload.chart_image_data_url)}
+
+
+def _decode_chart_image_data_url(value: str | None) -> bytes | None:
+    if not value:
+        return None
+    prefix = "data:image/png;base64,"
+    if not value.startswith(prefix):
+        raise ValueError("invalid_chart_image")
+    raw = base64.b64decode(value[len(prefix):], validate=True)
+    if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("invalid_chart_image")
+    if len(raw) > 5 * 1024 * 1024:
+        raise ValueError("chart_image_too_large")
+    return raw
 
 
 @app.post("/admin/social/x/post")
@@ -2892,13 +2908,9 @@ def post_x(payload: SocialPostRequest, user: Dict[str, Any] = Depends(require_ad
     final_content = ensure_disclaimer(content)
     try:
         media_id = None
-        if payload.source_signal_id:
-            with connect(cfg.DB_DSN) as conn:
-                srow = _get_signal_row_for_social(conn, payload.source_signal_id)
-                cdata = _load_signal_chart_payload(conn, srow) if srow else None
-            if cdata:
-                png = render_signal_return_chart_png(**cdata)
-                media_id = upload_media_to_x(settings, png)
+        chart_png = _decode_chart_image_data_url(payload.chart_image_data_url)
+        if chart_png:
+            media_id = upload_media_to_x(settings, chart_png)
         posted = post_to_x_with_media(settings, final_content, media_id=media_id)
         status = posted.get("status") or "posted"
         tweet_id = posted.get("tweet_id")
