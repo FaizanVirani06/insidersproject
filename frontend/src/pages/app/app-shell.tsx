@@ -59,7 +59,6 @@ export function AppShell() {
               <NavItem to="/app/for-you" label="For you" subtitle="Saved signal feed" />
               <NavItem to="/app/tickers" label="Tickers" subtitle="Browse company activity" />
               <NavItem to="/app/events" label="Events" subtitle="Recent insider filings" />
-              <NavItem to="/app/signals/best-performing" label="Best performing" subtitle="60-day leaderboard" />
               <NavItem to="/app/feedback" label="Feedback" subtitle="Tell us what to improve" />
             </div>
           </div>
