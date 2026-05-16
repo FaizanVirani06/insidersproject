@@ -32,8 +32,10 @@ function insiderLine(row: any): string {
 function BestPerformingPreview({ user }: { user: any }) {
   const [rows, setRows] = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const [expanded, setExpanded] = React.useState(false);
   const fullAccess = hasFullLeaderboardAccess(user);
   const rowLimit = fullAccess ? 20 : 5;
+  const visibleRows = fullAccess && expanded ? rows : rows.slice(0, 5);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -56,6 +58,10 @@ function BestPerformingPreview({ user }: { user: any }) {
       cancelled = true;
     };
   }, [fullAccess, rowLimit]);
+
+  React.useEffect(() => {
+    setExpanded(false);
+  }, [fullAccess]);
 
   return (
     <section className="relative overflow-hidden rounded-[2rem] border border-emerald-500/20 bg-zinc-950/70 p-4 shadow-2xl shadow-emerald-500/10 backdrop-blur-xl sm:p-5">
@@ -87,7 +93,7 @@ function BestPerformingPreview({ user }: { user: any }) {
               <div className="text-xs text-zinc-500">Ranked by return since filing, last 60 days</div>
             </div>
             <div className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-300">
-              {fullAccess ? "Top 20" : "Preview"}
+              {fullAccess ? "Top 20 available" : "Preview"}
             </div>
           </div>
 
@@ -97,7 +103,7 @@ function BestPerformingPreview({ user }: { user: any }) {
             <div className="p-5 text-sm text-zinc-400">Leaderboard data is warming up.</div>
           ) : (
             <div className="relative divide-y divide-zinc-800/80">
-              {rows.map((row, idx) => (
+              {visibleRows.map((row, idx) => (
                 <div key={`${row.signal_id || row.ticker}-${idx}`} className="grid grid-cols-[34px_minmax(0,1fr)_auto] gap-3 px-4 py-3">
                   <div className="flex h-8 w-8 items-center justify-center rounded-full border border-zinc-800 bg-zinc-950 text-xs font-semibold text-zinc-300">
                     {idx + 1}
@@ -117,6 +123,19 @@ function BestPerformingPreview({ user }: { user: any }) {
                   </div>
                 </div>
               ))}
+              {fullAccess && rows.length > 5 ? (
+                <button
+                  type="button"
+                  onClick={() => setExpanded((value) => !value)}
+                  className="flex w-full items-center justify-center gap-2 px-4 py-3 text-sm font-medium text-emerald-200 transition hover:bg-emerald-500/10"
+                  aria-expanded={expanded}
+                >
+                  <span>{expanded ? "Show top 5" : "Show full top 20"}</span>
+                  <span className={["text-base leading-none transition-transform", expanded ? "rotate-180" : ""].join(" ")}>
+                    v
+                  </span>
+                </button>
+              ) : null}
               {!fullAccess ? (
                 <div className="relative min-h-[92px] overflow-hidden">
                   <div className="grid grid-cols-[34px_minmax(0,1fr)_auto] gap-3 px-4 py-3 opacity-25 blur-[1px]">
