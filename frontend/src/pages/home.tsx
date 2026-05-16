@@ -11,17 +11,40 @@ function fmtReturn(value: unknown): string {
   return `${n > 0 ? "+" : ""}${n.toFixed(1)}%`;
 }
 
-function BestPerformingPreview() {
+function hasFullLeaderboardAccess(user: any): boolean {
+  const role = String(user?.role || "").toLowerCase();
+  const status = String(user?.subscription_status || "").toLowerCase();
+  return role === "admin" || role === "showcase" || Boolean(user?.is_paid) || status === "active" || status === "trialing";
+}
+
+function insiderLine(row: any): string {
+  const count = Number(row?.insider_count || 0);
+  const names = Array.isArray(row?.insider_names) ? row.insider_names.filter(Boolean) : [];
+  const verb = String(row?.transaction_code || "") === "P" ? "bought" : "filed";
+  if (count > 1) {
+    const shown = names.slice(0, 2).join(", ");
+    const suffix = count > 2 ? ` + ${count - 2} more` : "";
+    return `${count} insiders ${verb}: ${shown}${suffix}`;
+  }
+  return `${row.insider_name || "Insider"} filed ${fmtDate(row.filing_date)}`;
+}
+
+function BestPerformingPreview({ user }: { user: any }) {
   const [rows, setRows] = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const fullAccess = hasFullLeaderboardAccess(user);
+  const rowLimit = fullAccess ? 20 : 5;
 
   React.useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    apiFetch("/public/signals/best-performing?days=60&limit=5")
+    const path = fullAccess
+      ? "/signals/best-performing?days=60&limit=20"
+      : "/public/signals/best-performing?days=60&limit=5";
+    apiFetch(path)
       .then((r) => (r.ok ? r.json() : { results: [] }))
       .then((j) => {
-        if (!cancelled) setRows(Array.isArray(j?.results) ? j.results : []);
+        if (!cancelled) setRows((Array.isArray(j?.results) ? j.results : []).slice(0, rowLimit));
       })
       .catch(() => {
         if (!cancelled) setRows([]);
@@ -32,7 +55,7 @@ function BestPerformingPreview() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [fullAccess, rowLimit]);
 
   return (
     <section className="relative overflow-hidden rounded-[2rem] border border-emerald-500/20 bg-zinc-950/70 p-4 shadow-2xl shadow-emerald-500/10 backdrop-blur-xl sm:p-5">
@@ -64,7 +87,7 @@ function BestPerformingPreview() {
               <div className="text-xs text-zinc-500">Ranked by return since filing, last 60 days</div>
             </div>
             <div className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-300">
-              Preview
+              {fullAccess ? "Top 20" : "Preview"}
             </div>
           </div>
 
@@ -73,7 +96,7 @@ function BestPerformingPreview() {
           ) : rows.length === 0 ? (
             <div className="p-5 text-sm text-zinc-400">Leaderboard data is warming up.</div>
           ) : (
-            <div className="divide-y divide-zinc-800/80">
+            <div className="relative divide-y divide-zinc-800/80">
               {rows.map((row, idx) => (
                 <div key={`${row.signal_id || row.ticker}-${idx}`} className="grid grid-cols-[34px_minmax(0,1fr)_auto] gap-3 px-4 py-3">
                   <div className="flex h-8 w-8 items-center justify-center rounded-full border border-zinc-800 bg-zinc-950 text-xs font-semibold text-zinc-300">
@@ -85,7 +108,7 @@ function BestPerformingPreview() {
                       <span className="truncate text-sm text-zinc-400">{row.issuer_name || "Insider signal"}</span>
                     </div>
                     <div className="mt-1 truncate text-xs text-zinc-500">
-                      {row.insider_name || "Insider"} filed {fmtDate(row.filing_date)}
+                      {insiderLine(row)}
                     </div>
                   </div>
                   <div className="text-right">
@@ -94,6 +117,28 @@ function BestPerformingPreview() {
                   </div>
                 </div>
               ))}
+              {!fullAccess ? (
+                <div className="relative min-h-[92px] overflow-hidden">
+                  <div className="grid grid-cols-[34px_minmax(0,1fr)_auto] gap-3 px-4 py-3 opacity-25 blur-[1px]">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-full border border-zinc-800 bg-zinc-950 text-xs font-semibold text-zinc-300">
+                      6
+                    </div>
+                    <div className="min-w-0">
+                      <div className="h-4 w-44 rounded bg-zinc-800" />
+                      <div className="mt-2 h-3 w-64 max-w-full rounded bg-zinc-900" />
+                    </div>
+                    <div className="ml-4 h-5 w-16 rounded bg-emerald-500/20" />
+                  </div>
+                  <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-black/20 via-black/80 to-black px-4 text-center">
+                    <Link
+                      to="/pricing"
+                      className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200 shadow-lg shadow-black/30"
+                    >
+                      Subscribe to see full leaderboard
+                    </Link>
+                  </div>
+                </div>
+              ) : null}
             </div>
           )}
         </div>
@@ -155,7 +200,7 @@ export function HomePage() {
 
   return (
     <div className="space-y-14 pb-4">
-      <BestPerformingPreview />
+      <BestPerformingPreview user={user} />
 
       <section className="relative overflow-hidden rounded-[2rem] border border-zinc-800/70 bg-black/55 px-6 py-12 shadow-2xl shadow-purple-500/10 backdrop-blur-xl sm:px-10 sm:py-16">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(168,85,247,0.22),transparent_34%),radial-gradient(circle_at_top_right,rgba(34,211,238,0.18),transparent_32%),radial-gradient(circle_at_bottom_left,rgba(59,130,246,0.14),transparent_30%)]" />

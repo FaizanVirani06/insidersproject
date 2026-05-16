@@ -2785,7 +2785,7 @@ def best_performing_signals(
     limit: int = Query(50, ge=1, le=200),
     user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    hard_limit = int(limit)
+    hard_limit = min(int(limit), 20)
     free_limit = get_result_limit_for_user(user, "best_performing_signals")
     if free_limit is not None:
         hard_limit = min(hard_limit, free_limit)
@@ -2798,9 +2798,9 @@ def best_performing_signals(
 @app.get("/public/signals/best-performing")
 def public_best_performing_signals(
     days: int = Query(60, ge=1, le=365),
-    limit: int = Query(5, ge=1, le=8),
+    limit: int = Query(5, ge=1, le=5),
 ) -> Dict[str, Any]:
-    hard_limit = min(int(limit), 8)
+    hard_limit = min(int(limit), 5)
     with connect(cfg.DB_DSN) as conn:
         out = _query_best_performing_signals(conn, days=int(days), limit=hard_limit)
     return {"days": days, "limit": hard_limit, "results": out}
@@ -2808,6 +2808,7 @@ def public_best_performing_signals(
 
 def _query_best_performing_signals(conn: Any, *, days: int, limit: int) -> List[Dict[str, Any]]:
     start_date = (date.today() - timedelta(days=int(days))).isoformat()
+    candidate_limit = max(int(limit) * 20, 100)
     rows = conn.execute(
         """
         WITH event_base AS (
@@ -2862,15 +2863,36 @@ def _query_best_performing_signals(conn: Any, *, days: int, limit: int) -> List[
         ORDER BY percent_return DESC
         LIMIT ?
         """,
-        (start_date, int(limit)),
+        (start_date, candidate_limit),
     ).fetchall()
 
-    out = []
+    out: List[Dict[str, Any]] = []
+    by_ticker: Dict[str, Dict[str, Any]] = {}
     for r in rows:
         d = dict(r)
+        ticker = str(d.get("ticker") or "").strip().upper()
+        if not ticker:
+            continue
         d["signal_id"] = f"{d.get('issuer_cik')}:{d.get('owner_key')}:{d.get('accession_number')}"
         d["detail_path"] = f"/app/event/{d.get('issuer_cik')}/{d.get('owner_key')}/{d.get('accession_number')}"
-        out.append(d)
+        insider_name = str(d.get("insider_name") or "").strip()
+        existing = by_ticker.get(ticker)
+        if existing is None:
+            if len(out) >= int(limit):
+                continue
+            d["ticker"] = ticker
+            d["insider_count"] = 1 if insider_name else 0
+            d["insider_names"] = [insider_name] if insider_name else []
+            d["collapsed_signal_count"] = 1
+            d["is_collapsed_ticker"] = False
+            by_ticker[ticker] = d
+            out.append(d)
+        else:
+            existing["collapsed_signal_count"] = int(existing.get("collapsed_signal_count") or 1) + 1
+            if insider_name and insider_name not in existing["insider_names"]:
+                existing["insider_names"].append(insider_name)
+            existing["insider_count"] = len(existing["insider_names"])
+            existing["is_collapsed_ticker"] = int(existing.get("collapsed_signal_count") or 1) > 1
     return out
 
 
