@@ -192,6 +192,10 @@ class Config:
     X_POSTING_ENABLED: bool = _env_bool("X_POSTING_ENABLED", False) is True
     X_HANDLE: str | None = os.environ.get("X_HANDLE")
 
+    # Automatic trade plan generation.
+    # Internal AI ratings are 1-10; the UI displays these as 1-100.
+    TRADE_PLAN_MIN_BUY_RATING: float = float(os.environ.get("TRADE_PLAN_MIN_BUY_RATING", "6.0"))
+
 
 def load_config() -> Config:
     return Config()

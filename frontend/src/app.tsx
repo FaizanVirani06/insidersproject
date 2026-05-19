@@ -6,6 +6,8 @@ import { RootLayout } from "@/pages/root-layout";
 import { HomePage } from "@/pages/home";
 import { PricingPage } from "@/pages/pricing";
 import { LegalPage } from "@/pages/legal";
+import { PrivacyPage } from "@/pages/privacy";
+import { TermsPage } from "@/pages/terms";
 import { LoginPage } from "@/pages/login";
 import { SignupPage } from "@/pages/signup";
 
@@ -42,8 +44,8 @@ export function App() {
         <Route index element={<HomePage />} />
         <Route path="pricing" element={<PricingPage />} />
         <Route path="legal" element={<LegalPage />} />
-        <Route path="privacy" element={<Navigate to="/legal" replace />} />
-        <Route path="terms" element={<Navigate to="/legal" replace />} />
+        <Route path="privacy" element={<PrivacyPage />} />
+        <Route path="terms" element={<TermsPage />} />
         <Route path="login" element={<LoginPage />} />
         <Route path="signup" element={<SignupPage />} />
 
