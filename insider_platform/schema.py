@@ -477,6 +477,7 @@ CREATE TABLE IF NOT EXISTS social_posts (
     FOREIGN KEY (created_by_user_id) REFERENCES users(user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_social_posts_created ON social_posts (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_social_posts_source_signal ON social_posts (source_signal_id, created_at DESC);
 """
 
 

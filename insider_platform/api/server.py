@@ -2675,6 +2675,80 @@ class SocialTemplateRequest(BaseModel):
     source_signal_id: str
 
 
+def _social_signal_id(row: Dict[str, Any]) -> str:
+    return f"{row.get('issuer_cik')}:{row.get('owner_key')}:{row.get('accession_number')}"
+
+
+def _attach_social_post_status(conn: Any, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    ids: List[str] = []
+    for row in rows:
+        signal_ids = row.get("collapsed_signal_ids")
+        if isinstance(signal_ids, list):
+            ids.extend(str(x) for x in signal_ids if x)
+        elif row.get("signal_id"):
+            ids.append(str(row.get("signal_id")))
+
+    unique_ids = sorted(set(ids))
+    if not unique_ids:
+        return rows
+
+    placeholders = ",".join("?" for _ in unique_ids)
+    post_rows = conn.execute(
+        f"""
+        SELECT source_signal_id, status, x_tweet_url, posted_at, created_at
+        FROM social_posts
+        WHERE source_signal_id IN ({placeholders})
+        ORDER BY created_at DESC
+        """,
+        tuple(unique_ids),
+    ).fetchall()
+    posts_by_id: Dict[str, List[Dict[str, Any]]] = {}
+    for r in post_rows:
+        sid = str(r["source_signal_id"])
+        posts_by_id.setdefault(sid, []).append(dict(r))
+
+    for row in rows:
+        signal_ids = row.get("collapsed_signal_ids")
+        candidate_ids = signal_ids if isinstance(signal_ids, list) else [row.get("signal_id")]
+        matches = [post for x in candidate_ids if x for post in posts_by_id.get(str(x), [])]
+        posted = next((m for m in matches if m.get("status") == "posted"), None)
+        latest = posted or (matches[0] if matches else None)
+        row["is_posted"] = bool(posted)
+        row["social_status"] = latest.get("status") if latest else None
+        row["social_posted_at"] = latest.get("posted_at") if latest else None
+        row["social_tweet_url"] = latest.get("x_tweet_url") if latest else None
+    return rows
+
+
+def _query_recent_social_signals(conn: Any, *, limit: int) -> List[Dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT e.issuer_cik, e.owner_key, e.accession_number, e.ticker, e.filing_date, e.event_trade_date,
+               e.owner_name_display AS insider_name, e.owner_title AS insider_role,
+               COALESCE(e.buy_dollars_total, e.sell_dollars_total) AS transaction_dollar_value,
+               CASE WHEN e.has_buy=1 THEN 'BUY' WHEN e.has_sell=1 THEN 'SELL' ELSE 'SIGNAL' END AS signal_side,
+               GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1)) AS signal_score,
+               im.issuer_name
+        FROM insider_events e
+        LEFT JOIN issuer_master im ON im.issuer_cik=e.issuer_cik
+        WHERE (e.has_buy=1 OR e.has_sell=1)
+          AND e.ticker IS NOT NULL AND BTRIM(e.ticker) <> ''
+        ORDER BY COALESCE(NULLIF(e.filing_date,''), NULLIF(e.event_trade_date,'')) DESC,
+                 GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1)) DESC
+        LIMIT ?
+        """,
+        (int(limit),),
+    ).fetchall()
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d["signal_id"] = _social_signal_id(d)
+        d["detail_path"] = f"/app/event/{d.get('issuer_cik')}/{d.get('owner_key')}/{d.get('accession_number')}"
+        d["collapsed_signal_ids"] = [d["signal_id"]]
+        out.append(d)
+    return out
+
+
 def _get_signal_row_for_social(conn: Any, source_signal_id: str) -> Dict[str, Any] | None:
     try:
         cik, owner_key, acc = [x.strip() for x in str(source_signal_id).split(":", 2)]
@@ -2806,6 +2880,24 @@ def public_best_performing_signals(
     return {"days": days, "limit": hard_limit, "results": out}
 
 
+@app.get("/admin/social/x/candidates")
+def social_x_candidates(
+    mode: str = Query("new_signal"),
+    limit: int = Query(30, ge=1, le=50),
+    user: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    mode = (mode or "new_signal").strip().lower()
+    if mode not in ("new_signal", "best_performing"):
+        raise HTTPException(status_code=400, detail="invalid_mode")
+    with connect(cfg.DB_DSN) as conn:
+        if mode == "best_performing":
+            candidates = _query_best_performing_signals(conn, days=60, limit=min(int(limit), 20))
+        else:
+            candidates = _query_recent_social_signals(conn, limit=int(limit))
+        candidates = _attach_social_post_status(conn, candidates)
+    return {"mode": mode, "limit": int(limit), "candidates": candidates}
+
+
 def _query_best_performing_signals(conn: Any, *, days: int, limit: int) -> List[Dict[str, Any]]:
     start_date = (date.today() - timedelta(days=int(days))).isoformat()
     candidate_limit = max(int(limit) * 20, 100)
@@ -2881,14 +2973,20 @@ def _query_best_performing_signals(conn: Any, *, days: int, limit: int) -> List[
             if len(out) >= int(limit):
                 continue
             d["ticker"] = ticker
+            d["signal_id"] = _social_signal_id(d)
+            d["detail_path"] = f"/app/event/{d.get('issuer_cik')}/{d.get('owner_key')}/{d.get('accession_number')}"
             d["insider_count"] = 1 if insider_name else 0
             d["insider_names"] = [insider_name] if insider_name else []
             d["collapsed_signal_count"] = 1
+            d["collapsed_signal_ids"] = [d["signal_id"]]
             d["is_collapsed_ticker"] = False
             by_ticker[ticker] = d
             out.append(d)
         else:
+            signal_id = _social_signal_id(d)
             existing["collapsed_signal_count"] = int(existing.get("collapsed_signal_count") or 1) + 1
+            if signal_id not in existing["collapsed_signal_ids"]:
+                existing["collapsed_signal_ids"].append(signal_id)
             if insider_name and insider_name not in existing["insider_names"]:
                 existing["insider_names"].append(insider_name)
             existing["insider_count"] = len(existing["insider_names"])
