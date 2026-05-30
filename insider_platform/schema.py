@@ -298,6 +298,23 @@ CREATE TABLE IF NOT EXISTS issuer_prices_daily (
     PRIMARY KEY (issuer_cik, date)
 );
 CREATE INDEX IF NOT EXISTS idx_prices_issuer_date ON issuer_prices_daily (issuer_cik, date);
+
+CREATE TABLE IF NOT EXISTS issuer_ticker_validation (
+    issuer_cik TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    eodhd_symbol TEXT,
+    status TEXT NOT NULL CHECK (status IN ('valid','invalid','unknown')),
+    issuer_name TEXT,
+    provider_name TEXT,
+    provider_code TEXT,
+    provider_exchange TEXT,
+    match_score DOUBLE PRECISION,
+    reason TEXT,
+    checked_at TEXT NOT NULL,
+    PRIMARY KEY (issuer_cik, ticker)
+);
+CREATE INDEX IF NOT EXISTS idx_ticker_validation_status ON issuer_ticker_validation (status, checked_at);
+
 CREATE TABLE IF NOT EXISTS benchmark_prices_daily (
     symbol TEXT NOT NULL,
     date TEXT NOT NULL,

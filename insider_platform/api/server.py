@@ -16,6 +16,7 @@ from insider_platform.util.time import utcnow_iso
 from insider_platform.jobs.queue import enqueue_job
 
 from insider_platform.compute.trade_plan import compute_trade_plan_for_event
+from insider_platform.compute.ticker_validation import get_cached_validation, get_validation_status, validate_issuer_ticker
 
 from insider_platform.auth import get_current_user, require_admin, require_admin_viewer, require_subscription
 from insider_platform.entitlements import build_entitlements, get_result_limit_for_user, has_full_access
@@ -2086,6 +2087,10 @@ def get_event(
             raise HTTPException(status_code=404, detail="event_not_found")
 
         event = _sanitize_event_row_for_viewer(dict(row), is_admin=bool(user.get("is_admin")))
+        ticker_validation = None
+        if event.get("ticker"):
+            cached_validation = get_cached_validation(conn, cik, str(event.get("ticker") or ""))
+            ticker_validation = cached_validation.__dict__ if cached_validation else None
 
         # Enforce open_market_only for non-admin users even on direct event access.
         # (Admins may browse non-open-market events.)
@@ -2108,6 +2113,9 @@ def get_event(
             """,
             (cik, owner_key),
         ).fetchall()
+        if ticker_validation and ticker_validation.get("status") == "invalid":
+            outcomes = []
+            stats = []
 
         rows_raw = conn.execute(
             """
@@ -2190,6 +2198,7 @@ def get_event(
             },
             "ai_latest": ai_latest,
             "trade_plan": trade_plan,
+            "ticker_validation": ticker_validation,
         }
 
 
@@ -2250,6 +2259,17 @@ def ticker_prices(
         if not issuer_cik:
             raise HTTPException(status_code=404, detail="ticker_not_found")
 
+        validation = get_cached_validation(conn, issuer_cik, t)
+        if validation and validation.status == "invalid":
+            return {
+                "ticker": t,
+                "issuer_cik": issuer_cik,
+                "start": start_s,
+                "end": end_s,
+                "prices": [],
+                "ticker_validation": validation.__dict__,
+            }
+
         rows = conn.execute(
             """
             SELECT date, adj_close
@@ -2267,6 +2287,7 @@ def ticker_prices(
             "start": start_s,
             "end": end_s,
             "prices": [dict(r) for r in rows],
+            "ticker_validation": validation.__dict__ if validation else None,
         }
 
 
@@ -2775,6 +2796,9 @@ def _load_signal_chart_payload(conn: Any, signal: Dict[str, Any]) -> Dict[str, A
     issuer_cik = str(signal.get("issuer_cik") or "").strip()
     if not issuer_cik:
         return None
+    ticker = str(signal.get("ticker") or "").strip().upper()
+    if ticker and get_validation_status(conn, issuer_cik, ticker) == "invalid":
+        return None
     signal_date = str(signal.get("filing_date") or signal.get("event_trade_date") or "").strip()[:10]
     if not signal_date:
         return None
@@ -2926,7 +2950,8 @@ def _query_best_performing_signals(conn: Any, *, days: int, limit: int) -> List[
             sp0.date AS start_date_used,
             sp0.adj_close AS starting_price,
             sp1.date AS latest_date_used,
-            sp1.adj_close AS latest_price
+            sp1.adj_close AS latest_price,
+            sp1.source_ticker AS source_ticker
           FROM event_base b
           JOIN LATERAL (
             SELECT p.date, p.adj_close
@@ -2965,8 +2990,16 @@ def _query_best_performing_signals(conn: Any, *, days: int, limit: int) -> List[
         ticker = str(d.get("ticker") or "").strip().upper()
         if not ticker:
             continue
+        validation = _ensure_best_performer_ticker_validation(conn, d, ticker)
+        if validation and validation.status == "invalid":
+            continue
+        if validation is None and abs(float(d.get("percent_return") or 0.0)) > 500.0:
+            continue
+        if validation and validation.status == "unknown" and abs(float(d.get("percent_return") or 0.0)) > 500.0:
+            continue
         d["signal_id"] = f"{d.get('issuer_cik')}:{d.get('owner_key')}:{d.get('accession_number')}"
         d["detail_path"] = f"/app/event/{d.get('issuer_cik')}/{d.get('owner_key')}/{d.get('accession_number')}"
+        d["ticker_validation"] = validation.__dict__ if validation else None
         insider_name = str(d.get("insider_name") or "").strip()
         existing = by_ticker.get(ticker)
         if existing is None:
@@ -2992,6 +3025,28 @@ def _query_best_performing_signals(conn: Any, *, days: int, limit: int) -> List[
             existing["insider_count"] = len(existing["insider_names"])
             existing["is_collapsed_ticker"] = int(existing.get("collapsed_signal_count") or 1) > 1
     return out
+
+
+def _ensure_best_performer_ticker_validation(conn: Any, row: Dict[str, Any], ticker: str):
+    issuer_cik = str(row.get("issuer_cik") or "").strip()
+    if not issuer_cik or not ticker:
+        return None
+
+    cached = get_cached_validation(conn, issuer_cik, ticker)
+    if cached is not None:
+        return cached
+
+    try:
+        return validate_issuer_ticker(
+            conn,
+            cfg,
+            issuer_cik=issuer_cik,
+            ticker=ticker,
+            eodhd_symbol=str(row.get("source_ticker") or "").strip() or None,
+        )
+    except Exception as e:
+        _debug(f"Ticker validation unavailable for best performer issuer_cik={issuer_cik} ticker={ticker}: {e}")
+        return None
 
 
 
