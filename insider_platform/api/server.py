@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -15,8 +16,11 @@ from insider_platform.util.time import utcnow_iso
 from insider_platform.jobs.queue import enqueue_job
 
 from insider_platform.compute.trade_plan import compute_trade_plan_for_event
+from insider_platform.compute.ticker_validation import get_cached_validation, get_validation_status, validate_issuer_ticker
 
 from insider_platform.auth import get_current_user, require_admin, require_admin_viewer, require_subscription
+from insider_platform.entitlements import build_entitlements, get_result_limit_for_user, has_full_access
+from insider_platform.social.x_client import XSettings, ensure_disclaimer, post_to_x_with_media, upload_media_to_x
 from insider_platform.auth.crud import (
     bootstrap_admin_if_needed,
     create_user,
@@ -2083,6 +2087,10 @@ def get_event(
             raise HTTPException(status_code=404, detail="event_not_found")
 
         event = _sanitize_event_row_for_viewer(dict(row), is_admin=bool(user.get("is_admin")))
+        ticker_validation = None
+        if event.get("ticker"):
+            cached_validation = get_cached_validation(conn, cik, str(event.get("ticker") or ""))
+            ticker_validation = cached_validation.__dict__ if cached_validation else None
 
         # Enforce open_market_only for non-admin users even on direct event access.
         # (Admins may browse non-open-market events.)
@@ -2105,6 +2113,9 @@ def get_event(
             """,
             (cik, owner_key),
         ).fetchall()
+        if ticker_validation and ticker_validation.get("status") == "invalid":
+            outcomes = []
+            stats = []
 
         rows_raw = conn.execute(
             """
@@ -2187,6 +2198,7 @@ def get_event(
             },
             "ai_latest": ai_latest,
             "trade_plan": trade_plan,
+            "ticker_validation": ticker_validation,
         }
 
 
@@ -2247,6 +2259,17 @@ def ticker_prices(
         if not issuer_cik:
             raise HTTPException(status_code=404, detail="ticker_not_found")
 
+        validation = get_cached_validation(conn, issuer_cik, t)
+        if validation and validation.status == "invalid":
+            return {
+                "ticker": t,
+                "issuer_cik": issuer_cik,
+                "start": start_s,
+                "end": end_s,
+                "prices": [],
+                "ticker_validation": validation.__dict__,
+            }
+
         rows = conn.execute(
             """
             SELECT date, adj_close
@@ -2264,6 +2287,7 @@ def ticker_prices(
             "start": start_s,
             "end": end_s,
             "prices": [dict(r) for r in rows],
+            "ticker_validation": validation.__dict__ if validation else None,
         }
 
 
@@ -2665,3 +2689,439 @@ def admin_regenerate_ai(
         "event_key": {"issuer_cik": cik, "owner_key": owner_key, "accession_number": acc},
         "force": bool(payload.force),
     }
+
+
+class SocialTemplateRequest(BaseModel):
+    mode: str = "new_signal"  # new_signal|best_performing
+    source_signal_id: str
+
+
+def _social_signal_id(row: Dict[str, Any]) -> str:
+    return f"{row.get('issuer_cik')}:{row.get('owner_key')}:{row.get('accession_number')}"
+
+
+def _attach_social_post_status(conn: Any, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    ids: List[str] = []
+    for row in rows:
+        signal_ids = row.get("collapsed_signal_ids")
+        if isinstance(signal_ids, list):
+            ids.extend(str(x) for x in signal_ids if x)
+        elif row.get("signal_id"):
+            ids.append(str(row.get("signal_id")))
+
+    unique_ids = sorted(set(ids))
+    if not unique_ids:
+        return rows
+
+    placeholders = ",".join("?" for _ in unique_ids)
+    post_rows = conn.execute(
+        f"""
+        SELECT source_signal_id, status, x_tweet_url, posted_at, created_at
+        FROM social_posts
+        WHERE source_signal_id IN ({placeholders})
+        ORDER BY created_at DESC
+        """,
+        tuple(unique_ids),
+    ).fetchall()
+    posts_by_id: Dict[str, List[Dict[str, Any]]] = {}
+    for r in post_rows:
+        sid = str(r["source_signal_id"])
+        posts_by_id.setdefault(sid, []).append(dict(r))
+
+    for row in rows:
+        signal_ids = row.get("collapsed_signal_ids")
+        candidate_ids = signal_ids if isinstance(signal_ids, list) else [row.get("signal_id")]
+        matches = [post for x in candidate_ids if x for post in posts_by_id.get(str(x), [])]
+        posted = next((m for m in matches if m.get("status") == "posted"), None)
+        latest = posted or (matches[0] if matches else None)
+        row["is_posted"] = bool(posted)
+        row["social_status"] = latest.get("status") if latest else None
+        row["social_posted_at"] = latest.get("posted_at") if latest else None
+        row["social_tweet_url"] = latest.get("x_tweet_url") if latest else None
+    return rows
+
+
+def _query_recent_social_signals(conn: Any, *, limit: int) -> List[Dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT e.issuer_cik, e.owner_key, e.accession_number, e.ticker, e.filing_date, e.event_trade_date,
+               e.owner_name_display AS insider_name, e.owner_title AS insider_role,
+               COALESCE(e.buy_dollars_total, e.sell_dollars_total) AS transaction_dollar_value,
+               CASE WHEN e.has_buy=1 THEN 'BUY' WHEN e.has_sell=1 THEN 'SELL' ELSE 'SIGNAL' END AS signal_side,
+               GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1)) AS signal_score,
+               im.issuer_name
+        FROM insider_events e
+        LEFT JOIN issuer_master im ON im.issuer_cik=e.issuer_cik
+        WHERE (e.has_buy=1 OR e.has_sell=1)
+          AND e.ticker IS NOT NULL AND BTRIM(e.ticker) <> ''
+        ORDER BY COALESCE(NULLIF(e.filing_date,''), NULLIF(e.event_trade_date,'')) DESC,
+                 GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1)) DESC
+        LIMIT ?
+        """,
+        (int(limit),),
+    ).fetchall()
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d["signal_id"] = _social_signal_id(d)
+        d["detail_path"] = f"/app/event/{d.get('issuer_cik')}/{d.get('owner_key')}/{d.get('accession_number')}"
+        d["collapsed_signal_ids"] = [d["signal_id"]]
+        out.append(d)
+    return out
+
+
+def _get_signal_row_for_social(conn: Any, source_signal_id: str) -> Dict[str, Any] | None:
+    try:
+        cik, owner_key, acc = [x.strip() for x in str(source_signal_id).split(":", 2)]
+    except Exception:
+        return None
+    row = conn.execute(
+        """
+        SELECT e.issuer_cik, e.owner_key, e.accession_number, e.ticker, e.filing_date, e.event_trade_date,
+               e.owner_name_display, e.owner_title,
+               COALESCE(e.buy_dollars_total, e.sell_dollars_total) AS transaction_dollar_value,
+               CASE WHEN e.has_buy=1 THEN 'BUY' WHEN e.has_sell=1 THEN 'SELL' ELSE 'SIGNAL' END AS signal_side,
+               GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1)) AS signal_score,
+               im.issuer_name
+        FROM insider_events e
+        LEFT JOIN issuer_master im ON im.issuer_cik=e.issuer_cik
+        WHERE e.issuer_cik=? AND e.owner_key=? AND e.accession_number=?
+        """,
+        (cik, owner_key, acc),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _load_signal_chart_payload(conn: Any, signal: Dict[str, Any]) -> Dict[str, Any] | None:
+    issuer_cik = str(signal.get("issuer_cik") or "").strip()
+    if not issuer_cik:
+        return None
+    ticker = str(signal.get("ticker") or "").strip().upper()
+    if ticker and get_validation_status(conn, issuer_cik, ticker) == "invalid":
+        return None
+    signal_date = str(signal.get("filing_date") or signal.get("event_trade_date") or "").strip()[:10]
+    if not signal_date:
+        return None
+    start = (date.fromisoformat(signal_date) - timedelta(days=5)).isoformat()
+    rows = conn.execute(
+        """
+        SELECT date, adj_close
+        FROM issuer_prices_daily
+        WHERE issuer_cik=? AND date>=? AND adj_close IS NOT NULL
+        ORDER BY date ASC
+        LIMIT 800
+        """,
+        (issuer_cik, start),
+    ).fetchall()
+    if not rows:
+        return None
+    prices = [float(r["adj_close"]) for r in rows]
+    dates = [str(r["date"]) for r in rows]
+    start_idx = 0
+    for i, d in enumerate(dates):
+        if d >= signal_date:
+            start_idx = i
+            break
+    signal_price = prices[start_idx]
+    latest_price = prices[-1]
+    ret = ((latest_price / signal_price) - 1.0) * 100.0 if signal_price else 0.0
+    return {
+        "ticker": str(signal.get("ticker") or ""),
+        "dates": dates,
+        "prices": prices,
+        "signal_date": dates[start_idx],
+        "signal_price": signal_price,
+        "latest_price": latest_price,
+        "return_pct": ret,
+    }
+
+
+def _build_social_template(signal: Dict[str, Any], mode: str) -> str:
+    ticker = str(signal.get("ticker") or "").upper()
+    company = str(signal.get("issuer_name") or "").strip()
+    insider = str(signal.get("owner_name_display") or "Insider")
+    role = str(signal.get("owner_title") or "")
+    filed = str(signal.get("filing_date") or "")[:10]
+    score = signal.get("signal_score")
+    dollars = signal.get("transaction_dollar_value")
+    side = str(signal.get("signal_side") or "SIGNAL")
+    promo = "Try InsidrsAI free trial: https://insidrsai.com/pricing"
+    if mode == "best_performing":
+        head = f"Top performing insider signal: ${ticker}"
+    else:
+        head = f"New insider {side.lower()} signal detected: ${ticker}"
+    lines = [head]
+    if company:
+        lines.append(company)
+    detail = f"{insider}{(' / ' + role) if role else ''}"
+    lines.append(detail)
+    if dollars:
+        lines.append(f"Transaction value: ~${float(dollars):,.0f}")
+    if score is not None and float(score) >= 0:
+        lines.append(f"Signal score: {float(score):.1f}/10")
+    if filed:
+        lines.append(f"Filed: {filed}")
+    lines.append(promo)
+    lines.append("Research signal only. Not financial advice.")
+    return "\n".join(lines)
+
+class SocialPostRequest(BaseModel):
+    content: str | None = None
+    link_url: str | None = None
+    source_signal_id: str | None = None
+    chart_image_data_url: str | None = None
+
+
+@app.get("/me/entitlements")
+def me_entitlements(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    return build_entitlements(user)
+
+
+@app.get("/signals/best-performing")
+def best_performing_signals(
+    days: int = Query(60, ge=1, le=365),
+    limit: int = Query(50, ge=1, le=200),
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    hard_limit = min(int(limit), 20)
+    free_limit = get_result_limit_for_user(user, "best_performing_signals")
+    if free_limit is not None:
+        hard_limit = min(hard_limit, free_limit)
+
+    with connect(cfg.DB_DSN) as conn:
+        out = _query_best_performing_signals(conn, days=int(days), limit=hard_limit)
+    return {"days": days, "limit": hard_limit, "is_limited": free_limit is not None, "results": out}
+
+
+@app.get("/public/signals/best-performing")
+def public_best_performing_signals(
+    days: int = Query(60, ge=1, le=365),
+    limit: int = Query(5, ge=1, le=5),
+) -> Dict[str, Any]:
+    hard_limit = min(int(limit), 5)
+    with connect(cfg.DB_DSN) as conn:
+        out = _query_best_performing_signals(conn, days=int(days), limit=hard_limit)
+    return {"days": days, "limit": hard_limit, "results": out}
+
+
+@app.get("/admin/social/x/candidates")
+def social_x_candidates(
+    mode: str = Query("new_signal"),
+    limit: int = Query(30, ge=1, le=50),
+    user: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    mode = (mode or "new_signal").strip().lower()
+    if mode not in ("new_signal", "best_performing"):
+        raise HTTPException(status_code=400, detail="invalid_mode")
+    with connect(cfg.DB_DSN) as conn:
+        if mode == "best_performing":
+            candidates = _query_best_performing_signals(conn, days=60, limit=min(int(limit), 20))
+        else:
+            candidates = _query_recent_social_signals(conn, limit=int(limit))
+        candidates = _attach_social_post_status(conn, candidates)
+    return {"mode": mode, "limit": int(limit), "candidates": candidates}
+
+
+def _query_best_performing_signals(conn: Any, *, days: int, limit: int) -> List[Dict[str, Any]]:
+    start_date = (date.today() - timedelta(days=int(days))).isoformat()
+    candidate_limit = max(int(limit) * 20, 100)
+    rows = conn.execute(
+        """
+        WITH event_base AS (
+          SELECT
+            e.issuer_cik, e.owner_key, e.accession_number, e.ticker, im.issuer_name,
+            e.filing_date, e.event_trade_date AS transaction_date,
+            COALESCE(NULLIF(e.filing_date,''), NULLIF(e.event_trade_date,'')) AS signal_date,
+            e.owner_name_display AS insider_name,
+            e.owner_title AS insider_role,
+            CASE WHEN e.has_buy=1 THEN 'P' WHEN e.has_sell=1 THEN 'S' ELSE NULL END AS transaction_code,
+            COALESCE(e.buy_dollars_total, e.sell_dollars_total) AS transaction_dollar_value,
+            COALESCE(e.buy_shares_total, e.sell_shares_total) AS shares,
+            COALESCE(e.buy_vwap_price, e.sell_vwap_price) AS transaction_price,
+            GREATEST(COALESCE(e.ai_buy_rating,-1), COALESCE(e.ai_sell_rating,-1)) AS signal_score,
+            COALESCE(e.cluster_flag_buy, e.cluster_flag_sell, 0) AS cluster_flag
+          FROM insider_events e
+          LEFT JOIN issuer_master im ON im.issuer_cik=e.issuer_cik
+          WHERE COALESCE(NULLIF(e.filing_date,''), NULLIF(e.event_trade_date,'')) >= ?
+            AND e.ticker IS NOT NULL AND BTRIM(e.ticker) <> ''
+        ), priced AS (
+          SELECT
+            b.*,
+            sp0.date AS start_date_used,
+            sp0.adj_close AS starting_price,
+            sp1.date AS latest_date_used,
+            sp1.adj_close AS latest_price,
+            sp1.source_ticker AS source_ticker
+          FROM event_base b
+          JOIN LATERAL (
+            SELECT p.date, p.adj_close
+            FROM issuer_prices_daily p
+            WHERE p.issuer_cik = b.issuer_cik
+              AND p.date >= b.signal_date
+              AND p.adj_close IS NOT NULL
+            ORDER BY p.date ASC
+            LIMIT 1
+          ) sp0 ON TRUE
+          JOIN LATERAL (
+            SELECT p.date, p.adj_close
+            FROM issuer_prices_daily p
+            WHERE p.issuer_cik = b.issuer_cik
+              AND p.adj_close IS NOT NULL
+            ORDER BY p.date DESC
+            LIMIT 1
+          ) sp1 ON TRUE
+        )
+        SELECT
+          *,
+          (((latest_price / NULLIF(starting_price,0)) - 1.0) * 100.0) AS percent_return,
+          GREATEST(0, (CURRENT_DATE - (signal_date::date))) AS days_elapsed
+        FROM priced
+        WHERE starting_price IS NOT NULL AND latest_price IS NOT NULL
+        ORDER BY percent_return DESC
+        LIMIT ?
+        """,
+        (start_date, candidate_limit),
+    ).fetchall()
+
+    out: List[Dict[str, Any]] = []
+    by_ticker: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        d = dict(r)
+        ticker = str(d.get("ticker") or "").strip().upper()
+        if not ticker:
+            continue
+        validation = _ensure_best_performer_ticker_validation(conn, d, ticker)
+        if validation and validation.status == "invalid":
+            continue
+        if validation is None and abs(float(d.get("percent_return") or 0.0)) > 500.0:
+            continue
+        if validation and validation.status == "unknown" and abs(float(d.get("percent_return") or 0.0)) > 500.0:
+            continue
+        d["signal_id"] = f"{d.get('issuer_cik')}:{d.get('owner_key')}:{d.get('accession_number')}"
+        d["detail_path"] = f"/app/event/{d.get('issuer_cik')}/{d.get('owner_key')}/{d.get('accession_number')}"
+        d["ticker_validation"] = validation.__dict__ if validation else None
+        insider_name = str(d.get("insider_name") or "").strip()
+        existing = by_ticker.get(ticker)
+        if existing is None:
+            if len(out) >= int(limit):
+                continue
+            d["ticker"] = ticker
+            d["signal_id"] = _social_signal_id(d)
+            d["detail_path"] = f"/app/event/{d.get('issuer_cik')}/{d.get('owner_key')}/{d.get('accession_number')}"
+            d["insider_count"] = 1 if insider_name else 0
+            d["insider_names"] = [insider_name] if insider_name else []
+            d["collapsed_signal_count"] = 1
+            d["collapsed_signal_ids"] = [d["signal_id"]]
+            d["is_collapsed_ticker"] = False
+            by_ticker[ticker] = d
+            out.append(d)
+        else:
+            signal_id = _social_signal_id(d)
+            existing["collapsed_signal_count"] = int(existing.get("collapsed_signal_count") or 1) + 1
+            if signal_id not in existing["collapsed_signal_ids"]:
+                existing["collapsed_signal_ids"].append(signal_id)
+            if insider_name and insider_name not in existing["insider_names"]:
+                existing["insider_names"].append(insider_name)
+            existing["insider_count"] = len(existing["insider_names"])
+            existing["is_collapsed_ticker"] = int(existing.get("collapsed_signal_count") or 1) > 1
+    return out
+
+
+def _ensure_best_performer_ticker_validation(conn: Any, row: Dict[str, Any], ticker: str):
+    issuer_cik = str(row.get("issuer_cik") or "").strip()
+    if not issuer_cik or not ticker:
+        return None
+
+    cached = get_cached_validation(conn, issuer_cik, ticker)
+    if cached is not None:
+        return cached
+
+    try:
+        return validate_issuer_ticker(
+            conn,
+            cfg,
+            issuer_cik=issuer_cik,
+            ticker=ticker,
+            eodhd_symbol=str(row.get("source_ticker") or "").strip() or None,
+        )
+    except Exception as e:
+        _debug(f"Ticker validation unavailable for best performer issuer_cik={issuer_cik} ticker={ticker}: {e}")
+        return None
+
+
+
+@app.post("/admin/social/x/template")
+def social_x_template(payload: SocialTemplateRequest, user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    mode = (payload.mode or "new_signal").strip().lower()
+    if mode not in ("new_signal", "best_performing"):
+        raise HTTPException(status_code=400, detail="invalid_mode")
+    with connect(cfg.DB_DSN) as conn:
+        signal = _get_signal_row_for_social(conn, payload.source_signal_id)
+        chart = _load_signal_chart_payload(conn, signal) if signal else None
+    if not signal:
+        raise HTTPException(status_code=404, detail="source_signal_not_found")
+    content = _build_social_template(signal, mode=mode)
+    return {"content": ensure_disclaimer(content), "signal": signal, "chart": chart}
+
+@app.post("/admin/social/x/preview")
+def preview_x_post(payload: SocialPostRequest, user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    content = (payload.content or "").strip()
+    if not content and payload.source_signal_id:
+        content = f"Unusual insider activity detected: signal {payload.source_signal_id}"
+    return {"content": ensure_disclaimer(content), "has_chart": bool(payload.chart_image_data_url)}
+
+
+def _decode_chart_image_data_url(value: str | None) -> bytes | None:
+    if not value:
+        return None
+    prefix = "data:image/png;base64,"
+    if not value.startswith(prefix):
+        raise ValueError("invalid_chart_image")
+    raw = base64.b64decode(value[len(prefix):], validate=True)
+    if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("invalid_chart_image")
+    if len(raw) > 5 * 1024 * 1024:
+        raise ValueError("chart_image_too_large")
+    return raw
+
+
+@app.post("/admin/social/x/post")
+def post_x(payload: SocialPostRequest, user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    content = (payload.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content_required")
+    settings = XSettings(cfg.X_API_KEY, cfg.X_API_SECRET, cfg.X_ACCESS_TOKEN, cfg.X_ACCESS_TOKEN_SECRET, cfg.X_POSTING_ENABLED, cfg.X_HANDLE)
+    now = utcnow_iso()
+    status = "failed"
+    tweet_id = None
+    tweet_url = None
+    error = None
+    final_content = ensure_disclaimer(content)
+    try:
+        media_id = None
+        chart_png = _decode_chart_image_data_url(payload.chart_image_data_url)
+        if chart_png:
+            media_id = upload_media_to_x(settings, chart_png)
+        posted = post_to_x_with_media(settings, final_content, media_id=media_id)
+        status = posted.get("status") or "posted"
+        tweet_id = posted.get("tweet_id")
+        tweet_url = posted.get("tweet_url")
+        final_content = posted.get("content") or final_content
+    except Exception as e:
+        error = str(e)
+    with connect(cfg.DB_DSN) as conn:
+        row = conn.execute(
+            """INSERT INTO social_posts (platform,status,content,link_url,x_tweet_id,x_tweet_url,error_message,source_signal_id,created_by_user_id,created_at,posted_at)
+            VALUES ('x',?,?,?,?,?,?,?,?,?,?) RETURNING *""",
+            (status, final_content, payload.link_url, tweet_id, tweet_url, error, payload.source_signal_id, int(user["user_id"]), now, now if status in ("posted","dry_run") else None),
+        ).fetchone()
+    if error:
+        raise HTTPException(status_code=400, detail={"error": error, "post": dict(row)})
+    return {"post": dict(row)}
+
+
+@app.get("/admin/social/posts")
+def list_social_posts(limit: int = Query(30, ge=1, le=200), user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    with connect(cfg.DB_DSN) as conn:
+        rows = conn.execute("SELECT * FROM social_posts ORDER BY created_at DESC LIMIT ?", (int(limit),)).fetchall()
+    return {"posts": [dict(r) for r in rows]}

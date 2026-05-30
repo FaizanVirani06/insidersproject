@@ -81,6 +81,7 @@ export function AppShell() {
                 <NavItem to="/app/admin/feedback" label="Feedback inbox" subtitle="Customer feedback" />
                 <NavItem to="/app/admin/support" label="Support" subtitle={isShowcase ? "Read-only inbox view" : "Conversations and replies"} />
                 <NavItem to="/app/admin/settings" label="Site settings" subtitle={isShowcase ? "Read-only config view" : "Pricing and config"} />
+                {isAdmin ? <NavItem to="/app/admin/social" label="Social posting" subtitle="Post research signals to X" /> : null}
               </div>
             </div>
           ) : null}
